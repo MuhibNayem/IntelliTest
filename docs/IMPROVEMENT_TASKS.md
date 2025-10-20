@@ -44,6 +44,40 @@ This document outlines potential improvements for the AI Test Agent, broken down
 - **Details:** Implement mechanisms for users to rate agent responses, correct tool usage, or tag important code components, feeding this information back into the agent's knowledge base or fine-tuning process.
 - **Priority:** Medium
 
+## 2a. CLI Developer Experience [x]
+
+### Task: Ship Installable CLI Bootstrapper [x]
+- **Description:** Make the CLI globally available like `gemini` by publishing an installable package with an entry point that users can invoke after installing via `pipx`/`pip`.
+- **Subtasks:**
+    1. Convert the project to a wheel-focused layout (ensure `pyproject.toml` exposes `ai-test-agent` console script).
+    2. Provide packaging instructions and smoke-test `pipx install .`.
+    3. Add versioning and release documentation for publishing to PyPI/internal index.
+- **Priority:** High
+
+### Task: Implement `init` Command for Project Onboarding [x]
+- **Description:** Allow users to initialize configuration in their project directory (similar to `gemini init`).
+- **Subtasks:**
+    1. Design a project manifest (e.g., `.aitestagent/config.json`) capturing paths, frameworks, and model overrides.
+    2. Implement `ai-test-agent init` to scaffold the manifest, .env template, and recommended folder structure.
+    3. Validate existing manifests and provide friendly prompts if rerun.
+- **Priority:** High
+
+### Task: Support In-Project Workflows [x]
+- **Description:** Ensure subsequent CLI commands run relative to the initialized project directory without re-specifying `--project-path`.
+- **Subtasks:**
+    1. Load manifest/config when commands run inside a managed project.
+    2. Fall back to explicit flags when outside an initialized folder.
+    3. Add helpful messaging when invoked in an uninitialized directory.
+- **Priority:** Medium
+
+### Task: Document CLI Usage Patterns [x]
+- **Description:** Provide clear docs mirroring the new workflow (install → init → analyze/generate/run) so teams can adopt the CLI quickly.
+- **Subtasks:**
+    1. Update README with installation and quickstart instructions.
+    2. Add detailed CLI reference in `docs/` with examples for each command.
+    3. Explain configuration file schema and customization knobs.
+- **Priority:** Medium
+
 ## 3. `agent/tools.py` (Agent Tools)
 
 ### Task: Add Input Validation to Tools [x]

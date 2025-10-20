@@ -20,7 +20,23 @@ An AI-powered test automation agent that analyzes code, generates tests, and pro
 
 ## Installation
 
-### Using Poetry
+### Option 1: Pip / Pipx (recommended)
+
+Install the CLI globally so it is available from any project directory.
+
+```bash
+pipx install ai-test-agent
+# or, if you are working from a checked-out repo
+pipx install .
+```
+
+You can also install into an existing virtual environment:
+
+```bash
+pip install ai-test-agent
+```
+
+### Option 2: Using Poetry (development)
 
 ```bash
 git clone https://github.com/yourusername/ai-test-agent.git
@@ -34,50 +50,89 @@ docker build -t ai-test-agent .
 docker run -it ai-test-agent
 ```
 
-### Usage
+## Quickstart Workflow
 
-## Analyze a Project
-This command analyzes the specified project directory, identifies the project structure, and saves the analysis to a JSON file.
+1. **Initialize your project**  
+   From inside the project directory you want the agent to manage:
+   ```bash
+   ai-test-agent init
+   ```
+   This creates `.aitestagent/config.json` with sensible defaults (paths, thresholds, model names).  
+   Rerun `init` at any time to regenerate or adjust the manifest.
+
+2. **Analyze the codebase**  
+   When inside an initialized project, you no longer need to repeat `--project-path`:
+   ```bash
+    ai-test-agent analyze
+   ```
+   Results are written to the configured analysis output path (defaults to `analysis.json`).
+
+3. **Generate tests**
+   ```bash
+   ai-test-agent generate
+   ```
+   Tests are written to the configured tests directory (defaults to `tests/`).
+
+4. **Execute tests**
+   ```bash
+   ai-test-agent run
+   ```
+   Test results and coverage thresholds respect the manifest configuration.
+
+5. **Produce a report**
+   ```bash
+   ai-test-agent report
+   ```
+
+6. **Run everything end-to-end**
+   ```bash
+   ai-test-agent all
+   ```
+
+If you prefer to override any setting ad-hoc (e.g., a different output path), pass the flag and it will override the manifest for that invocation.
+
+## Commands At a Glance
+
+| Command | Description |
+| ------- | ----------- |
+| `ai-test-agent init` | Create `.aitestagent/config.json` in the current project. |
+| `ai-test-agent analyze` | Parse the project and write the structural analysis. |
+| `ai-test-agent generate` | Generate tests into the configured output directory. |
+| `ai-test-agent run` | Execute tests, collect results, and enforce coverage thresholds. |
+| `ai-test-agent report` | Build an HTML report from stored results. |
+| `ai-test-agent all` | Run analyze → generate → run → report in one go. |
+| `ai-test-agent debug` | Attempt iterative fixes when tests fail. |
+| `ai-test-agent interactive` | (Placeholder) Future interactive workflow. |
+
+From outside an initialized project, you can still supply paths explicitly, e.g.:
 ```bash
-ai-test-agent analyze --project-path /path/to/project --output analysis.json
+ai-test-agent analyze --project-path /path/to/project
 ```
 
-## Generate Tests
-This command generates test files for the specified project and saves them in the `tests` directory.
-```bash
-ai-test-agent generate --project-path /path/to/project --output-dir tests
-```
+For a detailed option reference, see [`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md).
 
-## Run Tests
-This command executes the tests in the specified project and saves the results to a JSON file.
-```bash
-ai-test-agent run --project-path /path/to/project --output results.json
-```
+## Project Manifest
 
-## Generate Report
-This command generates an HTML report from the test results.
-```bash
-ai-test-agent report --project-path /path/to/project --test-results results.json --output report.html
-```
+The manifest created by `init` lives at `.aitestagent/config.json` and stores relative paths
+and defaults for:
 
-## Run Complete Workflow
-This command runs the entire workflow: analysis, test generation, execution, and reporting.
-```bash
-ai-test-agent all --project-path /path/to/project
-```
+- project root
+- tests/analysis/results/report output paths
+- coverage thresholds
+- default LLM model
 
-## Interactive Mode
-This command starts the agent in interactive mode, allowing you to run commands one by one.
-```bash
-ai-test-agent interactive --project-path /path/to/project
-```
+Feel free to edit this file directly or rerun `ai-test-agent init` to regenerate it.  
+All commands look for the manifest in the current directory or any parent directory.
 
-### Configuration
-The agent can be configured through environment variables or configuration files:
+## Configuration
+
+Additional runtime settings can be provided via environment variables (particularly for LLM access):
 
  - **OLLAMA_HOST**: Host for Ollama service
  - **OLLAMA_PORT**: Port for Ollama service
  - **DEFAULT_MODEL**: Default LLM model to use
+
+The CLI will also create `.aitestagent/.env.example` during `init` for convenience.
 
 ### Contributing
  - Fork the repository
@@ -85,5 +140,3 @@ The agent can be configured through environment variables or configuration files
  - Make your changes
  - Add tests
  - Submit a pull request
-
-
