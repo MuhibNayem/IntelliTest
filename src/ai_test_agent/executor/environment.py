@@ -1,4 +1,5 @@
 import os
+import shutil
 import asyncio
 import venv
 from pathlib import Path
@@ -8,7 +9,7 @@ from ..config import Settings, settings
 class TestEnvironment:
     """Setup and manage test execution environment."""
     
-    def __init__(self, project_path: Union[str, Path] = None, settings_obj: Settings = settings):
+    def __init__(self, project_path: Union[str, Path, None] = None, settings_obj: Settings = settings):
         self.settings = settings_obj
         self.project_path = Path(project_path) if project_path else self.settings.project_root
         self.original_env = os.environ.copy()
@@ -148,28 +149,82 @@ class TestEnvironment:
         stdout, stderr = await process.communicate()
         if process.returncode != 0:
             raise Exception(f"Docker image build failed: {stderr.decode()}")
-        # Remove temporary files
+    
+    async def _create_temp_dirs(self):
+        """Create temporary directories and files required for test execution."""
+        created_dirs = set()
+        # Ensure test output directory exists
+        test_output_dir = self.project_path / self.settings.tests_output_dir
+        if not test_output_dir.exists():
+            test_output_dir.mkdir(parents=True, exist_ok=True)
+            created_dirs.add(test_output_dir)
+        
+        # Ensure directories for report/analysis outputs exist
+        file_outputs = [
+            self.settings.analysis_output_file,
+            self.settings.results_output_file,
+            self.settings.report_output_file,
+            self.settings.xml_report_output_file,
+            self.settings.coverage_output_file,
+        ]
+
+        for file_path in file_outputs:
+            absolute_path = self.project_path / file_path
+            parent_dir = absolute_path.parent
+            if not parent_dir.exists():
+                parent_dir.mkdir(parents=True, exist_ok=True)
+                created_dirs.add(parent_dir)
+            if not absolute_path.exists():
+                absolute_path.touch()
+                self.created_files.append(absolute_path)
+
+        self.created_dirs.extend(created_dirs)
+
+    async def _setup_env_vars(self):
+        """Configure environment variables required for running tests."""
+        project_pythonpath = str(self.project_path)
+        pythonpath = os.environ.get("PYTHONPATH", "")
+        pythonpath_entries = [p for p in pythonpath.split(os.pathsep) if p]
+        if project_pythonpath not in pythonpath_entries:
+            updated_pythonpath = project_pythonpath if not pythonpath_entries else f"{project_pythonpath}{os.pathsep}{pythonpath}"
+        else:
+            updated_pythonpath = pythonpath
+
+        env_updates = {
+            "PROJECT_ROOT": str(self.project_path),
+            "PYTHONPATH": updated_pythonpath,
+            "TESTS_OUTPUT_DIR": str((self.project_path / self.settings.tests_output_dir).resolve()),
+        }
+
+        for key, value in env_updates.items():
+            if key not in self.temp_env:
+                self.temp_env[key] = os.environ.get(key)
+            os.environ[key] = value
+
+    async def _cleanup_temp_files(self):
+        """Remove temporary files and directories created during setup."""
+        # Restore environment variables modified in setup (if still present)
+        for key, original_value in self.temp_env.items():
+            if original_value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = original_value
+        self.temp_env.clear()
+
+        # Remove files created by the environment
         for file_path in self.created_files:
             try:
                 if file_path.exists():
                     file_path.unlink()
-            except:
+            except OSError:
                 pass
-        
-        # Remove temporary directories
-        for dir_path in self.created_dirs:
+        self.created_files.clear()
+
+        # Remove directories that were created during setup
+        for dir_path in sorted(self.created_dirs, key=lambda p: len(p.parts), reverse=True):
             try:
                 if dir_path.exists():
-                    # Remove directory contents
-                    for file_path in dir_path.glob("*"):
-                        if file_path.is_file():
-                            file_path.unlink()
-                        elif file_path.is_dir():
-                            # Recursively remove subdirectories
-                            import shutil
-                            shutil.rmtree(file_path)
-                    
-                    # Remove the directory itself
-                    dir_path.rmdir()
-            except:
+                    shutil.rmtree(dir_path)
+            except OSError:
                 pass
+        self.created_dirs.clear()

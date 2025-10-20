@@ -1,9 +1,8 @@
-import xml.etree.ElementTree as ET
 from datetime import datetime
 import json
 import subprocess
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Union
 from .reporter import TestReporter
 from ..config import Settings, settings
 
@@ -14,7 +13,7 @@ class CoverageAnalyzer:
         self.settings = settings_obj
         self.reporter = TestReporter(self.settings)
     
-    def analyze_coverage(self, project_path: str) -> Dict:
+    def analyze_coverage(self, project_path: Union[str, Path]) -> Dict:
         """Analyze code coverage for a project."""
         project_path = Path(project_path)
         
@@ -145,7 +144,10 @@ class CoverageAnalyzer:
 
         for package_elem in root.findall(".//package"):
             for class_elem in package_elem.findall(".//class"):
-                file_name = class_elem.get("name").replace(".", "/") + ".java" # Convert class name to file path
+                name = class_elem.get("name") or class_elem.get("sourcefilename") or "Unknown"
+                file_name = name.replace(".", "/") if "." in name else name
+                if not file_name.endswith(".java"):
+                    file_name = file_name + ".java"  
 
                 file_lines_covered = 0
                 file_lines_missed = 0
@@ -156,8 +158,8 @@ class CoverageAnalyzer:
 
                 for counter_elem in class_elem.findall(".//counter"):
                     type = counter_elem.get("type")
-                    missed = int(counter_elem.get("missed"))
-                    covered = int(counter_elem.get("covered"))
+                    missed = int(counter_elem.get("missed", 0))
+                    covered = int(counter_elem.get("covered", 0))
 
                     if type == "LINE":
                         file_lines_covered += covered

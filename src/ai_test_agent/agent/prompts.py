@@ -22,7 +22,7 @@ Here are some examples:
 Question: List all python files in the current directory.
 Thought: The user wants to list python files. I should use the ListFilesTool with a pattern for python files.
 Action: ListFilesTool
-Action Input: {"pattern": "*.py"}
+Action Input: {{"pattern": "*.py"}}
 Observation: ["file1.py", "file2.py"]
 Thought: I have listed the python files. I can now provide the answer to the user.
 Final Answer: The python files in the current directory are: file1.py, file2.py

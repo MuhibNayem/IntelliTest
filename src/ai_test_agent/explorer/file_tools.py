@@ -6,7 +6,7 @@ from typing import Dict, List, Union, Tuple
 class FileTools:
     """Tools for file operations and terminal commands."""
     
-    def __init__(self, working_dir: str = None):
+    def __init__(self, working_dir: Union[str,None] = None):
         self.working_dir = Path(working_dir) if working_dir else Path.cwd()
     
     async def read_file(self, file_path: Union[str, Path]) -> str:
@@ -29,12 +29,12 @@ class FileTools:
             print(f"Error writing to {file_path}: {e}")
             return False
     
-    async def list_files(self, directory: Union[str, Path] = None, pattern: str = "*") -> List[str]:
+    async def list_files(self, directory: Union[str, Path, None] = None, pattern: str = "*") -> List[str]:
         """List files in a directory matching a pattern."""
         directory = self.working_dir / directory if directory else self.working_dir
         return [str(p) for p in directory.glob(pattern) if p.is_file()]
     
-    async def list_directories(self, directory: Union[str, Path] = None) -> List[str]:
+    async def list_directories(self, directory: Union[str, Path, None] = None) -> List[str]:
         """List subdirectories in a directory."""
         directory = self.working_dir / directory if directory else self.working_dir
         return [str(p) for p in directory.iterdir() if p.is_dir()]
@@ -83,7 +83,7 @@ class FileTools:
             print(f"Error deleting directory {directory}: {e}")
             return False
     
-    async def run_command(self, command: str, cwd: Union[str, Path] = None) -> Tuple[int, str, str]:
+    async def run_command(self, command: str, cwd: Union[str, Path, None] = None) -> Tuple[int, str, str]:
         """Run a shell command and return exit code, stdout, and stderr."""
         working_dir = self.working_dir / cwd if cwd else self.working_dir
         
@@ -98,14 +98,14 @@ class FileTools:
             stdout, stderr = await process.communicate()
             
             return (
-                process.returncode,
+                process.returncode if process.returncode is not None else -1,
                 stdout.decode('utf-8', errors='replace'),
                 stderr.decode('utf-8', errors='replace')
             )
         except Exception as e:
             return -1, "", str(e)
     
-    async def find_files(self, pattern: str, directory: Union[str, Path] = None) -> List[str]:
+    async def find_files(self, pattern: str, directory: Union[str, Path, None] = None) -> List[str]:
         """Find files matching a pattern using the find command."""
         directory = self.working_dir / directory if directory else self.working_dir
         command = f"find {directory} -name '{pattern}' -type f"
@@ -117,7 +117,7 @@ class FileTools:
             print(f"Error finding files: {stderr}")
             return []
     
-    async def grep_files(self, pattern: str, file_pattern: str = "*", directory: Union[str, Path] = None) -> List[Dict]:
+    async def grep_files(self, pattern: str, file_pattern: str = "*", directory: Union[str, Path, None] = None) -> List[Dict]:
         """Search for a pattern in files using grep."""
         directory = self.working_dir / directory if directory else self.working_dir
         command = f"grep -rn '{pattern}' {directory} --include='{file_pattern}'"

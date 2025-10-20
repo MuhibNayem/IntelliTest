@@ -1,5 +1,6 @@
 import os
 import fnmatch
+import warnings
 import networkx as nx
 from pathlib import Path
 from typing import Dict, Optional, List
@@ -11,8 +12,19 @@ class ProjectAnalyzer:
     def __init__(self, project_path: str, parser: Optional[CodeParser] = None, include: Optional[List[str]] = None, exclude: Optional[List[str]] = None):
         self.project_path = Path(project_path)
         self.parser = parser or CodeParser()
+        default_excludes = [
+            ".venv/**",
+            "node_modules/**",
+            "build/**",
+            "dist/**",
+            "__pycache__/**",
+            "*.pyc",
+            "*.pyo",
+            "*.pyd",
+            "*.class",
+        ]
         self.include = include or ["**/*"]
-        self.exclude = exclude or []
+        self.exclude = (exclude or []) + default_excludes
         self.dependency_graph = nx.DiGraph()
         self.call_graph = nx.DiGraph()
         self.file_info = {}
@@ -44,7 +56,17 @@ class ProjectAnalyzer:
     
     def _parse_all_files(self):
         """Parse all code files in the project that match the include/exclude patterns."""
-        for root, _, files in os.walk(self.project_path):
+        for root, dirs, files in os.walk(self.project_path):
+            # Remove excluded directories from traversal
+            dirs[:] = [
+                d for d in dirs
+                if not any(
+                    fnmatch.fnmatch(str(Path(root, d).relative_to(self.project_path)), pattern.rstrip("/**"))
+                    for pattern in self.exclude
+                    if pattern.endswith("/**")
+                )
+            ]
+
             for file in files:
                 file_path = Path(root) / file
                 # Check if the file should be included
@@ -170,6 +192,17 @@ class ProjectAnalyzer:
             pagerank = nx.pagerank(self.call_graph)
         except nx.PowerIterationFailedConvergence:
             pagerank = {node: 1.0 / len(self.call_graph) for node in self.call_graph.nodes}
+        except (ImportError, ModuleNotFoundError) as exc:
+            if "scipy" in str(exc).lower():
+                warnings.warn(
+                    "SciPy is not installed; falling back to degree centrality "
+                    "for call-graph scoring. Install 'scipy' to enable PageRank-based "
+                    "prioritization.",
+                    RuntimeWarning,
+                )
+                pagerank = nx.degree_centrality(self.call_graph)
+            else:
+                raise
 
         # Normalize scores
         max_rank = max(pagerank.values()) if pagerank else 1.0

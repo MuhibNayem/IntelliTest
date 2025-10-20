@@ -1,10 +1,19 @@
+import ast
 import json
+import logging
+import re
+import aiofiles
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, Union
 from jinja2 import Environment, FileSystemLoader
 from langchain_community.llms import Ollama
 from ..config import Settings, settings
 from .data_generator import TestDataGenerator
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
 class TestGenerator:
     """Generate test cases based on code analysis."""
@@ -15,20 +24,23 @@ class TestGenerator:
         self.templates_dir = Path(__file__).parent / "templates"
         self.env = Environment(loader=FileSystemLoader(self.templates_dir))
         self.data_generator = TestDataGenerator()
+        self.logger = logging.getLogger(__name__)
 
     
     def generate_tests(self, project_analysis: Dict, output_dir: str = str(settings.tests_output_dir)) -> Dict:
         """Generate test files based on project analysis."""
+        self.logger.debug("output_dir: %s", output_dir)
         output_path = Path(output_dir)
-        output_path.mkdir(exist_ok=True)
+        if not output_path.is_absolute():
+            output_path = self.settings.project_root / output_path
+        output_path.mkdir(parents=True, exist_ok=True)
         
         generated_tests = {}
         
         for file_path, file_info in project_analysis.get("files", {}).items():
             # Skip test files
-            if "test" in file_path.lower():
+            if "test" in file_path.lower() and re.search(r"test[_\.\-]?", Path(file_path).stem, re.IGNORECASE):
                 continue
-            
             # Determine language and template
             language = file_info.get("language", "")
             if language == ".py":
@@ -41,6 +53,7 @@ class TestGenerator:
                 template_name = "java_test.j2"
                 test_extension = "Test.java"
             else:
+                self.logger.debug("Skipping unsupported language '%s' for %s", language, file_path)
                 continue  # Skip unsupported languages
             
             # Enhance file info with AI-generated descriptions and test cases
@@ -51,10 +64,16 @@ class TestGenerator:
             test_content = template.render(**enhanced_info)
             
             # Determine output file path
-            relative_path = Path(file_path).relative_to(project_analysis.get("project_path", ""))
-            test_file_dir = output_path / relative_path.parent
+            project_root = Path(project_analysis.get("project_path", ""))
+            try:
+                relative_path = Path(file_path).relative_to(project_root)
+                test_file_dir = output_path / relative_path.parent
+                test_file_name = relative_path.stem + test_extension
+            except ValueError:
+                relative_path = Path(file_path).name
+                test_file_dir = output_path
+                test_file_name = Path(file_path).stem + test_extension
             test_file_dir.mkdir(parents=True, exist_ok=True)
-            test_file_name = relative_path.stem + test_extension
             test_file_path = test_file_dir / test_file_name
             
             # Write test file
@@ -96,8 +115,10 @@ class TestGenerator:
         """Generate function information using AI."""
         return self.generate_test_cases(func)
 
-    def generate_test_cases(self, function_info: Dict, class_name: str = None) -> Dict:
+    def generate_test_cases(self, function_info: Dict, class_name: Union[str, None] = None) -> Dict:
         """Generate specific test cases for a function or method."""
+        
+        self.logger.info("Generating test cases for function/method: %s", function_info.get("name", "<unknown>"))
         
         # Prepare context for the prompt
         func_name = function_info["name"]
@@ -174,21 +195,71 @@ class TestGenerator:
             "negative": [],
             "edge": []
         }}
+        Generate structured test cases in pure JSON.
+        Make sure:
+        - All string values are double quoted
+        - Exception names like TypeError are represented as strings, e.g. "TypeError"
+        - Return strict JSON only, with no comments or explanations. Do not include //, # or any other wrong JSON syntax.
+        Example output format:
+        {{"positive": [...], "negative": [...], "edge": [...]}}
+        
         """
         
         try:
-            response = self.llm(prompt)
-            return json.loads(response)
+
+            raw_response = self.llm.invoke(prompt)
+            test_cases = self.safe_parse_ai_response(raw_response)
+            return test_cases
         except Exception as e:
-            print(f"Error generating test cases: {e}")
+            self.logger.debug(f"Error generating test cases: {e}")
             return {"positive": [], "negative": [], "edge": []}
+        
+    def safe_parse_ai_response(self, raw_response: Any) -> Any:
+        """Parses an LLM response into JSON-safe Python dict."""
+
+        if isinstance(raw_response, str):
+            response_text = raw_response.strip()
+        elif hasattr(raw_response, "content"):
+            response_text = raw_response.content.strip()
+        else:
+            response_text = json.dumps(raw_response)
+
+        if "```" in response_text:
+            match = re.search(r"```(?:json)?(.*?)```", response_text, re.DOTALL)
+            if match:
+                response_text = match.group(1).strip()
+                
+        response_text = re.sub(r"//.*?$", "", response_text, flags=re.MULTILINE)
+        response_text = re.sub(r"#.*?$", "", response_text, flags=re.MULTILINE)
+
+
+        response_text = re.sub(
+            r'(?<!["\'])\b([A-Z][A-Za-z0-9_]*Error)\b(?!["\'])',
+            r'"\1"',
+            response_text
+        )
+        
+        response_text = re.sub(r",(\s*[}\]])", r"\1", response_text)
+
+        try:
+            return json.loads(response_text)
+        except json.JSONDecodeError:
+            pass
+
+        try:
+            return ast.literal_eval(response_text)
+        except Exception:
+            pass
+
+        self.logger.warning("AI response could not be parsed as JSON: %s", response_text)
+        return {"positive": [], "negative": [], "edge": []}
 
     async def apply_test_fix(self, test_file_path: Path, fix_suggestion: Dict) -> Dict:
         """Apply an AI-suggested fix to a test file."""
         try:
             # Read the current content of the test file
-            current_content = await aiofiles.open(test_file_path, 'r')
-            current_content = await current_content.read()
+            async with aiofiles.open(test_file_path, "r") as f:
+                current_content = await f.read()
 
             # Apply the fix based on the suggestion type
             modification_type = fix_suggestion.get("modification_type")
@@ -217,7 +288,7 @@ class TestGenerator:
                 return {"success": False, "error": f"Unsupported modification type: {modification_type}"}
 
             # Write the updated content back to the file
-            async with aiofiles.open(test_file_path, 'w') as f:
+            async with aiofiles.open(test_file_path, "w") as f:
                 await f.write(updated_content)
             
             return {"success": True, "message": f"Successfully applied fix to {test_file_path}."}

@@ -1,8 +1,7 @@
 import json
-from typing import Any, Dict, List, Optional, Type
+from typing import Optional
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
-from pathlib import Path
 
 from ..explorer.file_tools import FileTools
 from ..explorer.analyzer import ProjectAnalyzer
@@ -19,7 +18,7 @@ class ReadFileTool(BaseTool):
     class InputSchema(BaseModel):
         file_path: str = Field(..., description="The path to the file to read")
 
-    args_schema: Optional[Type[BaseModel]] = InputSchema
+    args_schema = InputSchema
     file_tools: FileTools
 
     def __init__(self, file_tools: FileTools, **kwargs):
@@ -44,7 +43,7 @@ class WriteFileTool(BaseTool):
         file_path: str = Field(..., description="The path to the file to write")
         content: str = Field(..., description="The content to write to the file")
 
-    args_schema: Optional[Type[BaseModel]] = InputSchema
+    args_schema = InputSchema
     file_tools: FileTools
     
     def __init__(self, file_tools: FileTools, **kwargs):
@@ -71,7 +70,7 @@ class ListFilesTool(BaseTool):
         directory: Optional[str] = Field(None, description="The directory to list files from. Defaults to current working directory.")
         pattern: str = Field("*", description="Glob pattern to filter files (e.g., '*.py', 'src/**/*.js'). Defaults to '*' (all files).")
 
-    args_schema: Optional[Type[BaseModel]] = InputSchema
+    args_schema = InputSchema
     file_tools: FileTools
     
     def __init__(self, file_tools: FileTools, **kwargs):
@@ -98,7 +97,7 @@ class RunCommandTool(BaseTool):
         command: str = Field(..., description="The shell command to run")
         cwd: Optional[str] = Field(None, description="The current working directory for the command. Defaults to project root.")
 
-    args_schema: Optional[Type[BaseModel]] = InputSchema
+    args_schema = InputSchema
     file_tools: FileTools
     
     def __init__(self, file_tools: FileTools, **kwargs):
@@ -132,7 +131,7 @@ class AnalyzeProjectTool(BaseTool):
     class InputSchema(BaseModel):
         project_path: Optional[str] = Field(None, description="The path to the project to analyze. Defaults to the agent's configured project path.")
 
-    args_schema: Optional[Type[BaseModel]] = InputSchema
+    args_schema = InputSchema
     analyzer: ProjectAnalyzer
     
     def __init__(self, analyzer: ProjectAnalyzer, **kwargs):
@@ -141,12 +140,12 @@ class AnalyzeProjectTool(BaseTool):
     
     def _run(self, *args, **kwargs) -> str:
         """Analyze the project structure."""
-        analysis = self.analyzer.analyze_project(kwargs.get('project_path', ""))
+        analysis = self.analyzer.analyze_project()
         return json.dumps(analysis)
     
     async def _arun(self, *args, **kwargs) -> str:
         """Analyze the project structure asynchronously."""
-        analysis = self.analyzer.analyze_project(kwargs.get('project_path', ""))
+        analysis = self.analyzer.analyze_project()
         return json.dumps(analysis)
 
 
@@ -159,7 +158,7 @@ class GenerateTestsTool(BaseTool):
         project_analysis: str = Field(..., description="JSON string of the project analysis, typically obtained from the analyze_project tool.")
         output_dir: Optional[str] = Field("tests", description="Directory to save generated tests. Defaults to 'tests'.")
 
-    args_schema: Optional[Type[BaseModel]] = InputSchema
+    args_schema = InputSchema
     test_generator: TestGenerator
     
     def __init__(self, test_generator: TestGenerator, **kwargs):
@@ -193,7 +192,7 @@ class RunTestsTool(BaseTool):
     class InputSchema(BaseModel):
         test_paths: Optional[str] = Field(None, description="JSON string of a list of specific test file paths to run. If not provided, all detected tests will be run.")
 
-    args_schema: Optional[Type[BaseModel]] = InputSchema
+    args_schema = InputSchema
     test_runner: TestRunner
     
     def __init__(self, test_runner: TestRunner, **kwargs):
@@ -229,7 +228,7 @@ class GenerateReportTool(BaseTool):
         test_results: str = Field(..., description="JSON string of the aggregated test results, typically obtained from the run_tests tool.")
         output_file: Optional[str] = Field("test_report.html", description="Path to the output HTML report file. Defaults to 'test_report.html'.")
 
-    args_schema: Optional[Type[BaseModel]] = InputSchema
+    args_schema = InputSchema
     aggregator: ResultsAggregator
     
     def __init__(self, aggregator: ResultsAggregator, **kwargs):

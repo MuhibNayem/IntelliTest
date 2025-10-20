@@ -171,8 +171,13 @@ def report(project_path: str, test_results: str, output: str, llm_model: str):
         with open(test_results, "r") as f:
             results = json.load(f)
 
+        # Try to locate a bundled HTML template; if not found, pass an empty string
+        # so the reporter can decide on a default behavior.
+        template_path = Path(__file__).resolve().parent / "templates" / "report_template.html"
+        template_arg = str(template_path) if template_path.exists() else ""
+
         report_path = agent.results_aggregator.reporter.generate_html_report(
-            results, output
+            results, output, template_arg
         )
         progress.update(task, completed=1)
     click.echo(f"Report generated: {report_path}")
@@ -235,6 +240,7 @@ def all(
         # Step 1: Analyze project
         analyze_task = progress.add_task("[cyan]Step 1: Analyzing project...", total=1)
         analysis_result = agent.analyze_project()
+        
         progress.update(analyze_task, completed=1)
         if not analysis_result["success"]:
             click.echo(f"Error in project analysis: {analysis_result['error']}")
@@ -244,8 +250,14 @@ def all(
         generate_task = progress.add_task("[cyan]Step 2: Generating tests...", total=1)
         test_result = agent.generate_tests(str(current_settings.tests_output_dir))
         progress.update(generate_task, completed=1)
+        click.echo(f"Generated {len(test_result['tests'].get('generated_tests', {}))} test files.")
+        click.echo(f"Tests are : {test_result['tests'].get('generated_tests', 'N/A')}")
         if not test_result["success"]:
             click.echo(f"Error in test generation: {test_result['error']}")
+            return
+        generated_tests = test_result["tests"].get("generated_tests", {})
+        if not generated_tests:
+            click.echo("No tests were generated; skipping test execution and report generation.")
             return
 
         # Step 3: Run tests
@@ -253,7 +265,7 @@ def all(
         run_result = agent.run_tests() # run_tests handles async internally
         progress.update(run_task, completed=1)
 
-        if not run_result["success"] or run_result["results"]["summary"].get("failed", 0) > 0:
+        if not run_result["success"] or run_result.get("results", {}).get("summary", {}).get("failed", 0) > 0:
             click.echo(f"Test execution failed: {run_result['error'] if not run_result['success'] else 'Some tests failed.'}")
             if debug_on_fail:
                 click.echo("Initiating AI-driven debugging...")

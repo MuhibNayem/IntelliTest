@@ -1,11 +1,13 @@
+import asyncio
 import json
 from pathlib import Path
-from typing import Dict, List, Optional, TypedDict, Annotated, Union
-from langchain_core.tools import Tool
+from typing import Dict, List, Optional, TypedDict, Annotated, Union, cast, Tuple
+from langchain.tools import BaseTool
 from langchain_core.agents import AgentAction
 from langchain_community.llms import Ollama
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 from langchain_core.exceptions import LangChainException
+from langchain_core.runnables import RunnableConfig
 from pydantic import ValidationError
 import re
 from langgraph.graph import StateGraph, END
@@ -29,7 +31,13 @@ from .tools import (
     RunTestsTool,
     GenerateReportTool
 )
-from .prompts import CUSTOM_PROMPT
+from .prompts import (
+    CUSTOM_PROMPT,
+    ANALYZE_PROJECT_PROMPT,
+    GENERATE_TESTS_PROMPT,
+    RUN_TESTS_PROMPT,
+    GENERATE_REPORT_PROMPT,
+)
 from ..config import Settings, settings
 
 class AgentState(TypedDict):
@@ -59,13 +67,22 @@ class TestAutomationAgent:
         self.parser = parser or CodeParser()
         self.analyzer = analyzer or ProjectAnalyzer(str(self.project_path), self.parser)
         self.file_tools = file_tools or FileTools(str(self.project_path))
-        self.test_generator = test_generator or TestGenerator(llm_model_name)
+        self.test_generator = test_generator or TestGenerator(llm_model_name, self.settings)
         self.data_generator = data_generator or TestDataGenerator()
         self.test_runner = test_runner or TestRunner(str(self.project_path), self.settings)
         self.results_aggregator = results_aggregator or ResultsAggregator(self.settings)
+        self._latest_analysis: Optional[Dict] = None
         
         # Initialize tools
-        self.tools = self._initialize_tools()
+        self.tools: List[BaseTool] = self._initialize_tools()
+        self._tool_names_text = ", ".join(tool.name for tool in self.tools)
+        self._tool_descriptions_text = self._format_tool_descriptions()
+        self._prompt_template = CUSTOM_PROMPT.format(
+            tools=self._tool_descriptions_text,
+            tool_names=self._tool_names_text,
+            input="{input}",
+            agent_scratchpad="{agent_scratchpad}",
+        )
         
         # Initialize memory saver for LangGraph
         self.memory_saver = MemorySaver()
@@ -73,7 +90,7 @@ class TestAutomationAgent:
         # Initialize agent
         self.agent = self._initialize_agent()
     
-    def _initialize_tools(self) -> List[Tool]:
+    def _initialize_tools(self) -> List[BaseTool]:
         """Initialize the tools for the agent."""
         return [
             ReadFileTool(self.file_tools),
@@ -86,6 +103,86 @@ class TestAutomationAgent:
             GenerateReportTool(self.results_aggregator)
         ]
     
+    def _format_tool_descriptions(self) -> str:
+        """Build a descriptive list of tools with optional guidance."""
+        guidance_map = {
+            "AnalyzeProjectTool": ANALYZE_PROJECT_PROMPT.strip(),
+            "GenerateTestsTool": GENERATE_TESTS_PROMPT.strip(),
+            "RunTestsTool": RUN_TESTS_PROMPT.strip(),
+            "GenerateReportTool": GENERATE_REPORT_PROMPT.strip(),
+        }
+        segments: List[str] = []
+        for tool in self.tools:
+            lines = [f"{tool.name}: {tool.description.strip()}"]
+            guidance = guidance_map.get(tool.name)
+            if guidance:
+                lines.append(f"Guidance: {guidance}")
+            segments.append("\n".join(lines))
+        return "\n\n".join(segments)
+
+    def _find_latest_user_message(self, messages: List[BaseMessage]) -> Tuple[Optional[int], Optional[HumanMessage]]:
+        """Locate the most recent human message in the conversation history."""
+        for index in range(len(messages) - 1, -1, -1):
+            message = messages[index]
+            if isinstance(message, HumanMessage):
+                return index, message
+        return None, None
+
+    def _build_agent_scratchpad(self, messages: List[BaseMessage]) -> str:
+        """Construct the agent scratchpad from previous actions and observations."""
+        scratchpad_parts: List[str] = []
+        for message in messages:
+            if isinstance(message, AIMessage):
+                if "action" in message.additional_kwargs:
+                    action = message.additional_kwargs["action"]
+                    if isinstance(action, AgentAction) and action.log:
+                        scratchpad_parts.append(action.log.strip())
+                else:
+                    content = message.content
+                    normalized = ""
+                    if isinstance(content, str):
+                        normalized = content.strip()
+                    elif isinstance(content, list):
+                        parts: List[str] = []
+                        for item in content:
+                            if isinstance(item, str):
+                                parts.append(item.strip())
+                            else:
+                                try:
+                                    parts.append(json.dumps(item))
+                                except Exception:
+                                    parts.append(str(item))
+                        normalized = "\n".join(p for p in parts if p).strip()
+                    elif isinstance(content, dict):
+                        try:
+                            normalized = json.dumps(content)
+                        except Exception:
+                            normalized = str(content)
+                    else:
+                        normalized = str(content)
+                    if normalized:
+                        scratchpad_parts.append(normalized)
+        return "\n".join(part for part in scratchpad_parts if part).strip()
+
+    @staticmethod
+    def _escape_braces(text: str) -> str:
+        """Escape braces so they survive subsequent string formatting."""
+        return text.replace("{", "{{").replace("}", "}}")
+
+    def _format_main_prompt(self, user_input: str, scratchpad: str) -> str:
+        """Create the full prompt presented to the LLM."""
+        sanitized_input = self._escape_braces(user_input.strip()) if user_input else ""
+        scratchpad_content = scratchpad.strip()
+        if scratchpad_content:
+            scratchpad_content = f"{scratchpad_content}\nThought:"
+        else:
+            scratchpad_content = "Thought:"
+        sanitized_scratchpad = self._escape_braces(scratchpad_content)
+        return self._prompt_template.format(
+            input=sanitized_input,
+            agent_scratchpad=sanitized_scratchpad
+        )
+
     def _parse_agent_output(self, llm_output: str) -> Union[AgentAction, Dict]:
         """Parse the LLM's output to extract an AgentAction or a final response."""
         # Use regex to parse the Action and Action Input
@@ -104,9 +201,28 @@ class TestAutomationAgent:
 
     def _agent_node(self, state: AgentState) -> Dict:
         """Agent node for LangGraph."""
-        # The LLM is invoked with the current messages and tools
-        # It should output a thought, then an action or a final answer.
-        llm_output = self.llm.invoke(state["messages"] + [HumanMessage(content=f"Available tools: {self.tools}")])
+        latest_user_index, latest_user_message = self._find_latest_user_message(state["messages"])
+        if latest_user_message:
+            content = latest_user_message.content
+            if isinstance(content, str):
+                user_input = content
+            elif isinstance(content, (list, dict)):
+                try:
+                    user_input = json.dumps(content)
+                except Exception:
+                    user_input = str(content)
+            else:
+                user_input = str(content)
+        else:
+            user_input = ""
+        if latest_user_index is not None:
+            history_messages = state["messages"][:latest_user_index] + state["messages"][latest_user_index + 1:]
+        else:
+            history_messages = state["messages"]
+        scratchpad = self._build_agent_scratchpad(history_messages)
+        prompt = self._format_main_prompt(user_input, scratchpad)
+
+        llm_output = self.llm.invoke([SystemMessage(content=prompt)])
         
         parsed_output = self._parse_agent_output(llm_output.content)
 
@@ -175,23 +291,12 @@ class TestAutomationAgent:
     def run(self, input_text: str) -> Dict:
         """Run the agent with the given input."""
         try:
-            # LangGraph app expects a list of BaseMessage
             user_message = HumanMessage(content=input_text)
-            
-            # Use a fixed thread_id for now, or generate/manage dynamically
-            # For interactive mode, a single thread_id is sufficient.
-            thread_id = "interactive_session" 
-            
-            config = {"configurable": {"thread_id": thread_id}}
-            
-            # Invoke the compiled LangGraph app
-            # The input is a dict with "messages" key, containing a list of BaseMessage
+            thread_id = "interactive_session"
+            config = cast(RunnableConfig, {"configurable": {"thread_id": thread_id}})
             result = self.agent.invoke({"messages": [user_message]}, config=config)
-            
-            # The result from LangGraph is typically a dict with a "messages" key
-            # containing the updated list of messages.
-            # We need to extract the last AI message.
             last_ai_message = ""
+            
             if "messages" in result and result["messages"]:
                 for msg in reversed(result["messages"]):
                     if isinstance(msg, AIMessage):
@@ -209,6 +314,7 @@ class TestAutomationAgent:
         """Analyze the project structure."""
         try:
             analysis = self.analyzer.analyze_project()
+            self._latest_analysis = analysis
             return {"success": True, "analysis": analysis}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -216,14 +322,16 @@ class TestAutomationAgent:
     def generate_tests(self, output_dir: str = "tests") -> Dict:
         """Generate tests for the project."""
         try:
-            # First analyze the project
-            analysis_result = self.analyze_project()
-            if not analysis_result["success"]:
-                return analysis_result
+            if not self._latest_analysis:
+                analysis_result = self.analyze_project()
+                if not analysis_result["success"]:
+                    return analysis_result
+                analysis_data = analysis_result["analysis"]
+            else:
+                analysis_data = self._latest_analysis
             
-            # Generate tests
             test_result = self.test_generator.generate_tests(
-                analysis_result["analysis"],
+                analysis_data,
                 output_dir
             )
             
@@ -233,16 +341,19 @@ class TestAutomationAgent:
         except Exception as e:
             return {"success": False, "error": str(e)}
     
-    def run_tests(self, test_paths: List[str] = None) -> Dict:
-        """Run tests and return results."""
+    async def _run_tests_async(self, test_paths: Optional[List[str]] = None) -> Dict:
+        """Run tests asynchronously and wrap results."""
         try:
-            import asyncio
-            results = asyncio.run(self.test_runner.run_tests(test_paths))
+            results = await self.test_runner.run_tests(test_paths)
             return {"success": True, "results": results}
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    def run_tests(self, test_paths: Optional[List[str]] = None) -> Dict:
+        """Run tests and return results, creating an event loop if necessary."""
+        return asyncio.run(self._run_tests_async(test_paths))
     
-    def generate_report(self, test_results: Dict = None, output_file: str = "test_report.html") -> Dict:
+    def generate_report(self, test_results: Dict, output_file: str = "test_report.html") -> Dict:
         """Generate a test report."""
         try:
             if test_results is None:
@@ -274,9 +385,10 @@ class TestAutomationAgent:
     async def debug_tests(self, max_iterations: int = 3) -> Dict:
         """Iteratively debug failed tests using AI suggestions."""
         click.echo("Starting AI-driven test debugging...")
+        run_result = None
         for iteration in range(1, max_iterations + 1):
             click.echo(f"\n--- Debugging Iteration {iteration}/{max_iterations} ---")
-            run_result = self.run_tests()
+            run_result = await self._run_tests_async()
 
             if run_result["success"] and run_result["results"]["summary"].get("failed", 0) == 0:
                 click.echo("All tests passed after debugging.")
@@ -300,7 +412,7 @@ class TestAutomationAgent:
                 click.echo(f"AI suggested and applied fixes: {fix_suggestion_result['message']}")
 
         click.echo(f"Debugging finished after {max_iterations} iterations. Tests may still be failing.")
-        return {"success": False, "error": "Tests still failing after maximum debugging iterations.", "results": run_result["results"]}
+        return {"success": False, "error": "Tests still failing after maximum debugging iterations.", "results": run_result["results"] if run_result else None}
 
     def _extract_failed_test_info(self, test_results: Dict) -> List[Dict]:
         """Extract relevant information from failed tests."""

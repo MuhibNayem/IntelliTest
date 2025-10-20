@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Union
 from datetime import datetime
 from .reporter import TestReporter
 from .coverage import CoverageAnalyzer
@@ -84,22 +84,44 @@ class ResultsAggregator:
         with open(self.history_file, "w") as f:
             json.dump(history, f, indent=2)
     
-    def generate_report(self, test_results: Dict, output_file: str = str(settings.report_output_file)) -> str:
+    def generate_report(self, test_results: Union[Dict, List[Dict]], output_file: str = str(settings.report_output_file)) -> str:
         """Generate a test report."""
-        # If test_results is a single result, convert to list
+        # Normalize single-result dict to a list and ensure correct typing for aggregate_results
         if isinstance(test_results, dict) and "summary" in test_results:
-            test_results = [test_results]
+            test_results_list: List[Dict] = [test_results]
+        elif isinstance(test_results, list):
+            test_results_list = test_results
+        else:
+            # Fallback: wrap any other value into a list
+            test_results_list = [test_results]  # type: ignore[arg-type]
         
         # Aggregate results
-        aggregated = self.aggregate_results(test_results)
+        aggregated = self.aggregate_results(test_results_list)
         
-        # Generate report
-        report_path = self.reporter.generate_html_report(aggregated, output_file)
+        # Determine output path relative to the configured project root
+        output_path = Path(output_file)
+        if not output_path.is_absolute():
+            output_path = (self.settings.project_root / output_path).resolve()
+
+        template_path = ""
+        if self.reporter.templates_dir.exists():
+            default_template = self.reporter.templates_dir / "html_report.j2"
+            template_path = str(default_template) if default_template.exists() else ""
+
+        report_path = self.reporter.generate_html_report(
+            aggregated,
+            str(output_path),
+            template_path
+        )
         
         return report_path
     
     def generate_coverage_report(self, project_path: str, output_file: str = str(settings.coverage_output_file)) -> str:
         """Generate a coverage report."""
         coverage_data = self.coverage_analyzer.analyze_coverage(project_path)
-        report_path = self.coverage_analyzer.generate_html_report(coverage_data, output_file)
+        output_path = Path(output_file)
+        if not output_path.is_absolute():
+            output_path = (self.settings.project_root / output_path).resolve()
+
+        report_path = self.coverage_analyzer.generate_html_report(coverage_data, str(output_path))
         return report_path

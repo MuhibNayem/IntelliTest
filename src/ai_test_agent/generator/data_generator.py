@@ -282,11 +282,37 @@ class TestDataGenerator:
     def _generate_fuzzed_data(self, data_type: str) -> List[Any]:
         """Generate fuzzed data for a given data type."""
         fuzzed_data = []
-        # Add incorrect data types
         incorrect_types = [123, 1.23, True, [], {}, None]
-        for item in incorrect_types:
-            if not isinstance(item, eval(data_type)):
-                fuzzed_data.append(item)
+
+        target_type = None
+        if isinstance(data_type, type):
+            target_type = data_type
+        elif isinstance(data_type, str):
+            normalized = data_type.lower()
+            type_mapping = {
+                "str": str,
+                "string": str,
+                "int": int,
+                "integer": int,
+                "float": float,
+                "double": float,
+                "decimal": float,
+                "bool": bool,
+                "boolean": bool,
+                "list": list,
+                "array": list,
+                "dict": dict,
+                "object": dict,
+                "map": dict,
+            }
+            target_type = type_mapping.get(normalized)
+
+        if target_type:
+            for item in incorrect_types:
+                if not isinstance(item, target_type):
+                    fuzzed_data.append(item)
+        else:
+            fuzzed_data.extend(incorrect_types)
 
         # Add malformed strings for all types
         malformed_strings = ["!@#$%^&*()", " ", "\n\t", "null", "undefined", "true", "false", "0", "-1"]

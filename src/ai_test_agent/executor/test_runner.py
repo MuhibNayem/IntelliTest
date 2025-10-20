@@ -1,7 +1,7 @@
 import asyncio
 import json
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Union
 from .environment import TestEnvironment
 from ..config import Settings, settings
 from ..reporting.coverage import CoverageAnalyzer
@@ -9,7 +9,7 @@ from ..reporting.coverage import CoverageAnalyzer
 class TestRunner:
     """Run tests and collect results."""
     
-    def __init__(self, project_path: str = None, settings_obj: Settings = settings):
+    def __init__(self, project_path: Union[str, None ] = None, settings_obj: Settings = settings):
         self.settings = settings_obj
         self.project_path = Path(project_path) if project_path else self.settings.project_root
         self.test_env = TestEnvironment(self.project_path, self.settings)
@@ -23,7 +23,7 @@ class TestRunner:
         self.generated_tests_map = generated_tests_map
         self.test_to_source_map = {v: k for k, v in generated_tests_map.items()}
     
-    async def run_tests(self, test_paths: List[str] = None, framework: str = "auto", parallel: bool = False, filter: str = None, run_in_docker: bool = False) -> Dict:
+    async def run_tests(self, test_paths: Union[List[str], None] = None, framework: str = "auto", parallel: bool = False, filter: Union[str, None] = None, run_in_docker: bool = False) -> Dict:
         """Run tests and return results."""
         if test_paths is None:
             # Find test files automatically
@@ -212,34 +212,45 @@ class TestRunner:
     async def _is_executable(self, name: str) -> bool:
         """Check if a command is executable."""
         process = await asyncio.create_subprocess_exec(
-            "which", name,
+            "which",
+            name,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
         )
         await process.communicate()
         return process.returncode == 0
-    
-        async def _run_pytest(self, test_paths: List[str], filter: str = None, run_in_docker: bool = False) -> Dict:
-            """Run pytest tests and stream output in real-time."""
-            cmd = ["python", "-m", "pytest"] + test_paths + ["--json-report", "--json-report-file=test_results.json"]
-            if filter:
-                cmd.extend(["-k", filter])
-    
-            if run_in_docker:
-                process = await self.test_env._run_in_docker(cmd)
-            else:
-                process = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    cwd=self.project_path,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
-                )
+
+    async def _run_pytest(self, test_paths: List[str], filter: Union[str, None ] = None, run_in_docker: bool = False) -> Dict:
+        """Run pytest tests and stream output in real-time."""
+        cmd = ["python", "-m", "pytest", *test_paths, "--json-report", "--json-report-file=test_results.json"]
+        if filter:
+            cmd.extend(["-k", filter])
+
+        if run_in_docker:
+            process = await self.test_env._run_in_docker(cmd)
+        else:
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                cwd=self.project_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
         stdout, stderr = b"", b""
+        stdout_stream = getattr(process, "stdout", None)
+        stderr_stream = getattr(process, "stderr", None)
         while True:
-            out_line = await process.stdout.readline()
-            err_line = await process.stderr.readline()
-            if not out_line and not err_line and process.returncode is not None:
-                break
+            out_line = b""
+            err_line = b""
+            if stdout_stream is not None:
+                out_line = await stdout_stream.readline()
+            if stderr_stream is not None:
+                err_line = await stderr_stream.readline()
+            if not out_line and not err_line:
+                if process.returncode is not None:
+                    break
+                await asyncio.sleep(0.05)
+                continue
             if out_line:
                 print(out_line.decode(), end="")
                 stdout += out_line
@@ -255,19 +266,19 @@ class TestRunner:
             "stdout": stdout.decode("utf-8"),
             "stderr": stderr.decode("utf-8"),
             "summary": {},
-            "tests": []
+            "tests": [],
         }
-        
+
         try:
             with open(self.project_path / "test_results.json", "r") as f:
                 json_report = json.load(f)
                 results["summary"] = json_report.get("summary", {})
-                
+
                 enriched_tests = []
                 for test in json_report.get("tests", []):
                     test_file_path_raw = test.get("nodeid", "").split("::")[0]
                     test_file_path_abs = str(self.project_path / test_file_path_raw)
-                    
+
                     test["test_file_path"] = test_file_path_abs
                     test["source_file_path"] = self.test_to_source_map.get(test_file_path_abs)
                     enriched_tests.append(test)
@@ -275,30 +286,40 @@ class TestRunner:
         except Exception as e:
             print(f"Error reading pytest json report: {e}")
             results["summary"] = self._parse_pytest_output(results["stdout"])
-        
+
         return results
-    
-        async def _run_jest(self, test_paths: List[str], filter: str = None, run_in_docker: bool = False) -> Dict:
-            """Run Jest tests and stream output in real-time."""
-            cmd = ["npx", "jest"] + test_paths + ["--json", "--outputFile=test_results.json"]
-            if filter:
-                cmd.extend(["-t", filter])
-    
-            if run_in_docker:
-                process = await self.test_env._run_in_docker(cmd)
-            else:
-                process = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    cwd=self.project_path,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
-                )
+
+    async def _run_jest(self, test_paths: List[str], filter: Union[str, None ] = None, run_in_docker: bool = False) -> Dict:
+        """Run Jest tests and stream output in real-time."""
+        cmd = ["npx", "jest", *test_paths, "--json", "--outputFile=test_results.json"]
+        if filter:
+            cmd.extend(["-t", filter])
+
+        if run_in_docker:
+            process = await self.test_env._run_in_docker(cmd)
+        else:
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                cwd=self.project_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
         stdout, stderr = b"", b""
+        stdout_stream = getattr(process, "stdout", None)
+        stderr_stream = getattr(process, "stderr", None)
         while True:
-            out_line = await process.stdout.readline()
-            err_line = await process.stderr.readline()
-            if not out_line and not err_line and process.returncode is not None:
-                break
+            out_line = b""
+            err_line = b""
+            if stdout_stream is not None:
+                out_line = await stdout_stream.readline()
+            if stderr_stream is not None:
+                err_line = await stderr_stream.readline()
+            if not out_line and not err_line:
+                if process.returncode is not None:
+                    break
+                await asyncio.sleep(0.05)
+                continue
             if out_line:
                 print(out_line.decode(), end="")
                 stdout += out_line
@@ -314,9 +335,9 @@ class TestRunner:
             "stdout": stdout.decode("utf-8"),
             "stderr": stderr.decode("utf-8"),
             "summary": {},
-            "tests": []
+            "tests": [],
         }
-        
+
         try:
             with open(self.project_path / "test_results.json", "r") as f:
                 json_report = json.load(f)
@@ -324,7 +345,7 @@ class TestRunner:
                     "total": json_report.get("numTotalTests", 0),
                     "passed": json_report.get("numPassedTests", 0),
                     "failed": json_report.get("numFailedTests", 0),
-                    "pending": json_report.get("numPendingTests", 0)
+                    "pending": json_report.get("numPendingTests", 0),
                 }
                 results["tests"] = []
                 for test_file_result in json_report.get("testResults", []):
@@ -338,30 +359,40 @@ class TestRunner:
         except Exception as e:
             print(f"Error reading jest json report: {e}")
             results["summary"] = self._parse_jest_output(results["stdout"])
-        
+
         return results
-    
-        async def _run_junit(self, test_paths: List[str], filter: str = None, run_in_docker: bool = False) -> Dict:
-            """Run JUnit tests and stream output in real-time."""
-            cmd = ["mvn", "test"]
-            if filter:
-                cmd.append(f"-Dtest={filter}")
-    
-            if run_in_docker:
-                process = await self.test_env._run_in_docker(cmd)
-            else:
-                process = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    cwd=self.project_path,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
-                )
+
+    async def _run_junit(self, test_paths: List[str], filter: Union[str, None ] = None, run_in_docker: bool = False) -> Dict:
+        """Run JUnit tests and stream output in real-time."""
+        cmd = ["mvn", "test"]
+        if filter:
+            cmd.append(f"-Dtest={filter}")
+
+        if run_in_docker:
+            process = await self.test_env._run_in_docker(cmd)
+        else:
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                cwd=self.project_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
         stdout, stderr = b"", b""
+        stdout_stream = getattr(process, "stdout", None)
+        stderr_stream = getattr(process, "stderr", None)
         while True:
-            out_line = await process.stdout.readline()
-            err_line = await process.stderr.readline()
-            if not out_line and not err_line and process.returncode is not None:
-                break
+            out_line = b""
+            err_line = b""
+            if stdout_stream is not None:
+                out_line = await stdout_stream.readline()
+            if stderr_stream is not None:
+                err_line = await stderr_stream.readline()
+            if not out_line and not err_line:
+                if process.returncode is not None:
+                    break
+                await asyncio.sleep(0.05)
+                continue
             if out_line:
                 print(out_line.decode(), end="")
                 stdout += out_line
@@ -377,21 +408,20 @@ class TestRunner:
             "stdout": stdout.decode("utf-8"),
             "stderr": stderr.decode("utf-8"),
             "summary": {},
-            "tests": []
+            "tests": [],
         }
-        
+
         results["summary"] = self._parse_maven_output(results["stdout"])
-        
+
         surefire_dir = self.project_path / "target" / "surefire-reports"
         if surefire_dir.exists():
             for report_file in surefire_dir.glob("*.xml"):
                 try:
-                    # Pass the report_file (which is the test file path) to the parser
                     report_results = self._parse_surefire_report(report_file, test_paths)
                     results["tests"].extend(report_results)
                 except Exception as e:
                     print(f"Error parsing surefire report {report_file}: {e}")
-        
+
         return results
     
     def _parse_pytest_output(self, output: str) -> Dict:

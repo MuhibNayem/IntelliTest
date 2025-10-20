@@ -36,16 +36,6 @@ RUN if [ -f package.json ]; then npm install; fi
 
 # Copy the application code
 COPY src/ ./src/
-COPY tests/ ./tests/
-
-# Clone tree-sitter grammars into vendor directory
-RUN mkdir -p vendor && \
-    git clone https://github.com/tree-sitter/tree-sitter-python.git vendor/tree-sitter-python && \
-    git clone https://github.com/tree-sitter/tree-sitter-javascript.git vendor/tree-sitter-javascript && \
-    git clone https://github.com/tree-sitter/tree-sitter-java.git vendor/tree-sitter-java
-
-# Build tree-sitter parsers
-RUN mkdir -p build && python -c "from tree_sitter import Language; Language.build_library('build/my-languages.so', ['vendor/tree-sitter-python', 'vendor/tree-sitter-javascript', 'vendor/tree-sitter-java'])"
 
 # Create a non-root user
 RUN useradd --create-home --shell /bin/bash app

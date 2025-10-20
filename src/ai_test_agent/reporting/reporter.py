@@ -11,7 +11,7 @@ class TestReporter:
         self.settings = settings_obj
         self.templates_dir = Path(__file__).parent.parent / "generator" / "templates"
     
-    def generate_html_report(self, test_results: Dict, output_file: str = None, template_path: str = None) -> str:
+    def generate_html_report(self, test_results: Dict, output_file: str , template_path: str ) -> str:
         """Generate an HTML test report."""
         if output_file is None:
             output_file = self.settings.report_output_file
@@ -41,7 +41,7 @@ class TestReporter:
         
         return str(report_path.absolute())
     
-    def generate_json_report(self, test_results: Dict, output_file: str = None) -> str:
+    def generate_json_report(self, test_results: Dict, output_file: str) -> str:
         """Generate a JSON test report."""
         if output_file is None:
             output_file = self.settings.results_output_file
@@ -52,7 +52,7 @@ class TestReporter:
         
         return str(report_path.absolute())
     
-    def generate_xml_report(self, test_results: Dict, output_file: str = None) -> str:
+    def generate_xml_report(self, test_results: Dict, output_file: str) -> str:
         """Generate an XML test report (JUnit format)."""
         if output_file is None:
             output_file = self.settings.xml_report_output_file
