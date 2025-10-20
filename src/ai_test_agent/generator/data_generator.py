@@ -1,12 +1,19 @@
 import random
 import string
+import json
 from datetime import datetime, timedelta
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Type
+from pydantic import BaseModel
+from langchain_community.llms import Ollama
+from ..config import Settings, settings
+
 
 class TestDataGenerator:
     """Generate test data for various types and scenarios."""
     
-    def __init__(self):
+    def __init__(self, llm_model_name: str = settings.llm_model_name, settings_obj: Settings = settings):
+        self.settings = settings_obj
+        self.llm = Ollama(model=llm_model_name)
         self.string_templates = [
             "test_string_{}",
             "example_{}",
@@ -15,10 +22,17 @@ class TestDataGenerator:
             "value_{}"
         ]
     
-    def generate_data(self, data_type: str, constraints: Dict = None) -> Any:
-        """Generate test data based on type and constraints."""
+    def generate_data(self, data_type: str, param_name: str = None, constraints: Dict = None) -> Any:
+        """Generate test data based on type, parameter name, and constraints."""
         constraints = constraints or {}
+
+        if param_name:
+            # Try to generate contextual data using the LLM
+            contextual_data = self._generate_contextual_data(data_type, param_name, constraints)
+            if contextual_data is not None:
+                return contextual_data
         
+        # Fallback to rule-based generation
         if data_type.lower() in ["str", "string"]:
             return self.generate_string(**constraints)
         elif data_type.lower() in ["int", "integer"]:
@@ -39,9 +53,39 @@ class TestDataGenerator:
             return self.generate_url(**constraints)
         elif data_type.lower() in ["phone", "telephone"]:
             return self.generate_phone(**constraints)
+        elif isinstance(data_type, type) and issubclass(data_type, BaseModel):
+            return self.generate_pydantic_model(data_type, **constraints)
         else:
             # Default to string if type is unknown
             return self.generate_string(**constraints)
+
+    def generate_pydantic_model(self, model_class: Type[BaseModel], **kwargs) -> Dict:
+        """Generate a dictionary of data for a Pydantic model."""
+        generated_data = {}
+        for field_name, field in model_class.__fields__.items():
+            field_type = field.outer_type_
+            # This is a simplified approach. A more robust solution would handle complex types and constraints.
+            generated_data[field_name] = self.generate_data(str(field_type), param_name=field_name)
+        return generated_data
+
+    def _generate_contextual_data(self, data_type: str, param_name: str, constraints: Dict) -> Any:
+        """Generate contextual data using the LLM."""
+        prompt = f"""
+        Given a parameter named `{param_name}` of type `{data_type}` with the following constraints:
+        {json.dumps(constraints, indent=2)}
+
+        Generate a single, realistic, and valid example value for this parameter.
+        Return only the generated value as a JSON-compatible string.
+        For example, if the value is a string, return it in double quotes.
+        If the value is a number, return it as a number.
+        If the value is a boolean, return `true` or `false`.
+        """
+        
+        try:
+            response = self.llm(prompt)
+            return json.loads(response)
+        except Exception:
+            return None
     
     def generate_string(self, min_length: int = 1, max_length: int = 10, 
                        prefix: str = "", suffix: str = "", 
@@ -176,8 +220,9 @@ class TestDataGenerator:
     
     def generate_edge_cases(self, data_type: str) -> List[Any]:
         """Generate edge case values for a given data type."""
+        edge_cases = []
         if data_type.lower() in ["str", "string"]:
-            return [
+            edge_cases.extend([
                 "",  # Empty string
                 " ",  # Space
                 "\n",  # Newline
@@ -186,9 +231,11 @@ class TestDataGenerator:
                 "😀",  # Unicode emoji
                 "null",  # String that looks like null
                 "undefined",  # String that looks like undefined
-            ]
+                "<script>alert('xss')</script>", # XSS attempt
+                "' OR 1=1 --", # SQL injection attempt
+            ])
         elif data_type.lower() in ["int", "integer"]:
-            return [
+            edge_cases.extend([
                 0,  # Zero
                 -1,  # Negative
                 1,  # Positive
@@ -196,37 +243,53 @@ class TestDataGenerator:
                 -2**31,  # Min 32-bit int
                 2**63 - 1,  # Max 64-bit int
                 -2**63,  # Min 64-bit int
-            ]
+            ])
         elif data_type.lower() in ["float", "double", "decimal"]:
-            return [
+            edge_cases.extend([
                 0.0,  # Zero
                 -0.0,  # Negative zero
                 1.0,  # One
                 -1.0,  # Negative one
-                3.14159,  # Pi
+                3.1415926535897932384626433832795,  # High precision pi
                 float('inf'),  # Infinity
                 float('-inf'),  # Negative infinity
+                float('nan'), # Not a number
                 0.1 + 0.2,  # Floating point precision issue
-            ]
+            ])
         elif data_type.lower() in ["bool", "boolean"]:
-            return [
-                True,  # True
-                False,  # False
-            ]
+            edge_cases.extend([True, False])
         elif data_type.lower() in ["list", "array"]:
-            return [
+            edge_cases.extend([
                 [],  # Empty list
                 [None],  # List with None
-                [1, 2, 3, 4, 5],  # Typical list
+                [1, 2, 3, 4, 5],
                 [1] * 1000,  # Large list
                 ["a", "b", "c", "a", "b"],  # List with duplicates
-            ]
+            ])
         elif data_type.lower() in ["dict", "object", "map"]:
-            return [
+            edge_cases.extend([
                 {},  # Empty dict
                 {"key": None},  # Dict with None value
-                {"a": 1, "b": 2, "c": 3},  # Typical dict
+                {"a": 1, "b": 2, "c": 3},
                 {f"key_{i}": i for i in range(100)},  # Large dict
-            ]
+            ])
         else:
-            return [None]  # Default edge case
+            edge_cases.append(None)  # Default edge case
+
+        edge_cases.extend(self._generate_fuzzed_data(data_type))
+        return edge_cases
+
+    def _generate_fuzzed_data(self, data_type: str) -> List[Any]:
+        """Generate fuzzed data for a given data type."""
+        fuzzed_data = []
+        # Add incorrect data types
+        incorrect_types = [123, 1.23, True, [], {}, None]
+        for item in incorrect_types:
+            if not isinstance(item, eval(data_type)):
+                fuzzed_data.append(item)
+
+        # Add malformed strings for all types
+        malformed_strings = ["!@#$%^&*()", " ", "\n\t", "null", "undefined", "true", "false", "0", "-1"]
+        fuzzed_data.extend(malformed_strings)
+
+        return fuzzed_data

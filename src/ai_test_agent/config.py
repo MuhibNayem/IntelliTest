@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import List, Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 
@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     # LLM Settings
-    llm_model_name: str = "gpt-oss-20b"
+    llm_model_name: str = "qwen2.5-coder:1.5b"
 
     # Project Paths
     project_root: Path = Path.cwd()
@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     openai_api_key: Optional[str] = None
 
     # Thresholds (example)
-    coverage_threshold: float = 80.0
+    min_line_coverage: float = 80.0
+    min_branch_coverage: float = 80.0
+    min_function_coverage: float = 80.0
+
+    # Coverage Exclusion Rules
+    coverage_exclude_patterns: List[str] = []
 
 settings = Settings()

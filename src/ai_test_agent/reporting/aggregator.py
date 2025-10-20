@@ -1,3 +1,5 @@
+import json
+from pathlib import Path
 from typing import Dict, List
 from datetime import datetime
 from .reporter import TestReporter
@@ -11,6 +13,7 @@ class ResultsAggregator:
         self.settings = settings_obj
         self.reporter = TestReporter(self.settings)
         self.coverage_analyzer = CoverageAnalyzer(self.settings)
+        self.history_file = self.settings.project_root / "test_history.json"
     
     def aggregate_results(self, test_results: List[Dict]) -> Dict:
         """Aggregate multiple test results into a single summary."""
@@ -57,10 +60,29 @@ class ResultsAggregator:
         else:
             summary["pass_rate"] = 0
         
-        return {
+        aggregated_results = {
             "summary": summary,
             "details": detailed_results
         }
+
+        self._store_historical_data(aggregated_results)
+
+        return aggregated_results
+
+    def _store_historical_data(self, results: Dict):
+        """Store aggregated test results for trend analysis."""
+        history = []
+        if self.history_file.exists():
+            with open(self.history_file, "r") as f:
+                try:
+                    history = json.load(f)
+                except json.JSONDecodeError:
+                    pass
+        
+        history.append(results)
+
+        with open(self.history_file, "w") as f:
+            json.dump(history, f, indent=2)
     
     def generate_report(self, test_results: Dict, output_file: str = str(settings.report_output_file)) -> str:
         """Generate a test report."""

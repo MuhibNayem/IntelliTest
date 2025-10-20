@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Dict, List
 from .environment import TestEnvironment
 from ..config import Settings, settings
+from ..reporting.coverage import CoverageAnalyzer
 
 class TestRunner:
     """Run tests and collect results."""
@@ -12,9 +13,17 @@ class TestRunner:
         self.settings = settings_obj
         self.project_path = Path(project_path) if project_path else self.settings.project_root
         self.test_env = TestEnvironment(self.project_path, self.settings)
+        self.coverage_analyzer = CoverageAnalyzer(self.settings)
         self.results = {}
+        self.generated_tests_map = {}
+        self.test_to_source_map = {}
+
+    def set_generated_tests_map(self, generated_tests_map: Dict[str, str]):
+        """Set the map of generated test files to source files."""
+        self.generated_tests_map = generated_tests_map
+        self.test_to_source_map = {v: k for k, v in generated_tests_map.items()}
     
-    async def run_tests(self, test_paths: List[str] = None, framework: str = "auto") -> Dict:
+    async def run_tests(self, test_paths: List[str] = None, framework: str = "auto", parallel: bool = False, filter: str = None, run_in_docker: bool = False) -> Dict:
         """Run tests and return results."""
         if test_paths is None:
             # Find test files automatically
@@ -23,27 +32,70 @@ class TestRunner:
         if not test_paths:
             return {"error": "No test files found"}
         
-        # Determine test framework
-        if framework == "auto":
-            framework = await self._detect_framework(test_paths)
-        
-        # Setup test environment
-        await self.test_env.setup()
-        
-        # Run tests based on framework
-        if framework == "pytest":
-            results = await self._run_pytest(test_paths)
-        elif framework == "jest":
-            results = await self._run_jest(test_paths)
-        elif framework == "junit":
-            results = await self._run_junit(test_paths)
+        # Group test paths by framework
+        framework_groups = await self._group_by_framework(test_paths, framework)
+
+        if not run_in_docker:
+            # Setup test environment
+            await self.test_env.setup()
+
+        tasks = []
+        for fw, paths in framework_groups.items():
+            if fw == "pytest":
+                tasks.append(self._run_pytest(paths, filter, run_in_docker))
+            elif fw == "jest":
+                tasks.append(self._run_jest(paths, filter, run_in_docker))
+            elif fw == "junit":
+                tasks.append(self._run_junit(paths, filter, run_in_docker))
+
+        if parallel:
+            results = await asyncio.gather(*tasks)
         else:
-            results = {"error": f"Unsupported test framework: {framework}"}
+            results = []
+            for task in tasks:
+                results.append(await task)
+
+        if not run_in_docker:
+            # Cleanup test environment
+            await self.test_env.cleanup()
         
-        # Cleanup test environment
-        await self.test_env.cleanup()
-        
-        return results
+        # Combine results
+        combined_results = {
+            "summary": {},
+            "tests": []
+        }
+        for res in results:
+            for k, v in res.get("summary", {}).items():
+                combined_results["summary"][k] = combined_results["summary"].get(k, 0) + v
+            combined_results["tests"].extend(res.get("tests", []))
+
+        # Analyze coverage
+        coverage_data = self.coverage_analyzer.analyze_coverage(str(self.project_path))
+        combined_results["coverage"] = coverage_data
+
+        # Check coverage thresholds
+        threshold_check = self.coverage_analyzer.check_coverage_thresholds(coverage_data)
+        combined_results["coverage_threshold_check"] = threshold_check
+        if not threshold_check["thresholds_met"]:
+            print("Coverage thresholds not met:")
+            for msg in threshold_check["messages"]:
+                print(f"- {msg}")
+            # Optionally, raise an exception or set a failure status
+
+        return combined_results
+
+    async def _group_by_framework(self, test_paths: List[str], framework: str) -> Dict[str, List[str]]:
+        """Group test paths by their detected framework."""
+        groups = {}
+        for path in test_paths:
+            fw = framework
+            if fw == "auto":
+                fw = await self._detect_framework([path])
+            
+            if fw not in groups:
+                groups[fw] = []
+            groups[fw].append(path)
+        return groups
     
     async def _find_test_files(self) -> List[str]:
         """Find test files in the project."""
@@ -65,7 +117,15 @@ class TestRunner:
         return test_files
     
     async def _detect_framework(self, test_paths: List[str]) -> str:
-        """Detect the test framework based on test files and project configuration."""
+        """Detect the test framework based on test files, project configuration, and environment."""
+        # Check for executables
+        if await self._is_executable("pytest"):
+            return "pytest"
+        if await self._is_executable("jest"):
+            return "jest"
+        if await self._is_executable("mvn"):
+            return "junit"
+
         # Check for pytest
         if any(path.endswith(".py") for path in test_paths):
             # Check for pytest configuration
@@ -78,7 +138,17 @@ class TestRunner:
             
             for config in pytest_configs:
                 if (self.project_path / config).exists():
-                    return "pytest"
+                    if config == "pyproject.toml":
+                        try:
+                            import toml
+                            with open(self.project_path / config, "r") as f:
+                                pyproject = toml.load(f)
+                                if "tool" in pyproject and "pytest" in pyproject["tool"]:
+                                    return "pytest"
+                        except (ImportError, Exception):
+                            pass
+                    else:
+                        return "pytest"
             
             # Default to pytest for Python projects
             return "pytest"
@@ -100,7 +170,7 @@ class TestRunner:
                         try:
                             with open(self.project_path / config, "r") as f:
                                 package_json = json.load(f)
-                                if "jest" in package_json or "devDependencies" in package_json and "jest" in package_json["devDependencies"]:
+                                if "jest" in package_json.get("dependencies", {}) or "jest" in package_json.get("devDependencies", {}):
                                     return "jest"
                         except:
                             pass
@@ -138,29 +208,47 @@ class TestRunner:
             return "junit"
         
         return "unknown"
-    
-    async def _run_pytest(self, test_paths: List[str]) -> Dict:
-        """Run pytest tests."""
-        # Prepare pytest command
-        cmd = ["python", "-m", "pytest"]
-        
-        # Add test paths
-        cmd.extend(test_paths)
-        
-        # Add options for JSON output
-        cmd.extend(["--json-report", "--json-report-file=test_results.json"])
-        
-        # Run pytest
+
+    async def _is_executable(self, name: str) -> bool:
+        """Check if a command is executable."""
         process = await asyncio.create_subprocess_exec(
-            *cmd,
-            cwd=self.project_path,
+            "which", name,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        
-        stdout, stderr = await process.communicate()
-        
-        # Parse results
+        await process.communicate()
+        return process.returncode == 0
+    
+        async def _run_pytest(self, test_paths: List[str], filter: str = None, run_in_docker: bool = False) -> Dict:
+            """Run pytest tests and stream output in real-time."""
+            cmd = ["python", "-m", "pytest"] + test_paths + ["--json-report", "--json-report-file=test_results.json"]
+            if filter:
+                cmd.extend(["-k", filter])
+    
+            if run_in_docker:
+                process = await self.test_env._run_in_docker(cmd)
+            else:
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    cwd=self.project_path,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+        stdout, stderr = b"", b""
+        while True:
+            out_line = await process.stdout.readline()
+            err_line = await process.stderr.readline()
+            if not out_line and not err_line and process.returncode is not None:
+                break
+            if out_line:
+                print(out_line.decode(), end="")
+                stdout += out_line
+            if err_line:
+                print(err_line.decode(), end="")
+                stderr += err_line
+
+        await process.wait()
+
         results = {
             "framework": "pytest",
             "exit_code": process.returncode,
@@ -170,40 +258,56 @@ class TestRunner:
             "tests": []
         }
         
-        # Try to parse JSON report
         try:
             with open(self.project_path / "test_results.json", "r") as f:
                 json_report = json.load(f)
                 results["summary"] = json_report.get("summary", {})
-                results["tests"] = json_report.get("tests", [])
-        except:
-            # Fallback to parsing stdout
+                
+                enriched_tests = []
+                for test in json_report.get("tests", []):
+                    test_file_path_raw = test.get("nodeid", "").split("::")[0]
+                    test_file_path_abs = str(self.project_path / test_file_path_raw)
+                    
+                    test["test_file_path"] = test_file_path_abs
+                    test["source_file_path"] = self.test_to_source_map.get(test_file_path_abs)
+                    enriched_tests.append(test)
+                results["tests"] = enriched_tests
+        except Exception as e:
+            print(f"Error reading pytest json report: {e}")
             results["summary"] = self._parse_pytest_output(results["stdout"])
         
         return results
     
-    async def _run_jest(self, test_paths: List[str]) -> Dict:
-        """Run Jest tests."""
-        # Prepare Jest command
-        cmd = ["npx", "jest"]
-        
-        # Add test paths
-        cmd.extend(test_paths)
-        
-        # Add options for JSON output
-        cmd.extend(["--json", "--outputFile=test_results.json"])
-        
-        # Run Jest
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            cwd=self.project_path,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        
-        stdout, stderr = await process.communicate()
-        
-        # Parse results
+        async def _run_jest(self, test_paths: List[str], filter: str = None, run_in_docker: bool = False) -> Dict:
+            """Run Jest tests and stream output in real-time."""
+            cmd = ["npx", "jest"] + test_paths + ["--json", "--outputFile=test_results.json"]
+            if filter:
+                cmd.extend(["-t", filter])
+    
+            if run_in_docker:
+                process = await self.test_env._run_in_docker(cmd)
+            else:
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    cwd=self.project_path,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+        stdout, stderr = b"", b""
+        while True:
+            out_line = await process.stdout.readline()
+            err_line = await process.stderr.readline()
+            if not out_line and not err_line and process.returncode is not None:
+                break
+            if out_line:
+                print(out_line.decode(), end="")
+                stdout += out_line
+            if err_line:
+                print(err_line.decode(), end="")
+                stderr += err_line
+
+        await process.wait()
+
         results = {
             "framework": "jest",
             "exit_code": process.returncode,
@@ -213,7 +317,6 @@ class TestRunner:
             "tests": []
         }
         
-        # Try to parse JSON report
         try:
             with open(self.project_path / "test_results.json", "r") as f:
                 json_report = json.load(f)
@@ -223,29 +326,51 @@ class TestRunner:
                     "failed": json_report.get("numFailedTests", 0),
                     "pending": json_report.get("numPendingTests", 0)
                 }
-                results["tests"] = json_report.get("testResults", [])
-        except:
-            # Fallback to parsing stdout
+                results["tests"] = []
+                for test_file_result in json_report.get("testResults", []):
+                    test_file_path_abs = test_file_result.get("testFilePath")
+                    if test_file_path_abs:
+                        source_file_path = self.test_to_source_map.get(test_file_path_abs)
+                        for assertion_result in test_file_result.get("testResults", []):
+                            assertion_result["test_file_path"] = test_file_path_abs
+                            assertion_result["source_file_path"] = source_file_path
+                            results["tests"].append(assertion_result)
+        except Exception as e:
+            print(f"Error reading jest json report: {e}")
             results["summary"] = self._parse_jest_output(results["stdout"])
         
         return results
     
-    async def _run_junit(self, test_paths: List[str]) -> Dict:
-        """Run JUnit tests."""
-        # Prepare Maven command
-        cmd = ["mvn", "test"]
-        
-        # Run Maven
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            cwd=self.project_path,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        
-        stdout, stderr = await process.communicate()
-        
-        # Parse results
+        async def _run_junit(self, test_paths: List[str], filter: str = None, run_in_docker: bool = False) -> Dict:
+            """Run JUnit tests and stream output in real-time."""
+            cmd = ["mvn", "test"]
+            if filter:
+                cmd.append(f"-Dtest={filter}")
+    
+            if run_in_docker:
+                process = await self.test_env._run_in_docker(cmd)
+            else:
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    cwd=self.project_path,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+        stdout, stderr = b"", b""
+        while True:
+            out_line = await process.stdout.readline()
+            err_line = await process.stderr.readline()
+            if not out_line and not err_line and process.returncode is not None:
+                break
+            if out_line:
+                print(out_line.decode(), end="")
+                stdout += out_line
+            if err_line:
+                print(err_line.decode(), end="")
+                stderr += err_line
+
+        await process.wait()
+
         results = {
             "framework": "junit",
             "exit_code": process.returncode,
@@ -255,18 +380,17 @@ class TestRunner:
             "tests": []
         }
         
-        # Try to parse test results from Maven output
         results["summary"] = self._parse_maven_output(results["stdout"])
         
-        # Try to parse surefire reports
         surefire_dir = self.project_path / "target" / "surefire-reports"
         if surefire_dir.exists():
             for report_file in surefire_dir.glob("*.xml"):
                 try:
-                    report_results = self._parse_surefire_report(report_file)
+                    # Pass the report_file (which is the test file path) to the parser
+                    report_results = self._parse_surefire_report(report_file, test_paths)
                     results["tests"].extend(report_results)
-                except:
-                    pass
+                except Exception as e:
+                    print(f"Error parsing surefire report {report_file}: {e}")
         
         return results
     
@@ -336,7 +460,7 @@ class TestRunner:
         lines = output.split("\n")
         for line in lines:
             if "Tests run:" in line:
-                # Example: "Tests run: 5, Failures: 1, Errors: 0, Skipped: 0"
+                # Example: "Tests run: 5, Failures: 1, Errors: 0, Skipped: 0" 
                 parts = line.split(", ")
                 for part in parts:
                     if "Tests run:" in part:
@@ -351,7 +475,7 @@ class TestRunner:
         summary["passed"] = summary["total"] - summary["failed"] - summary["errors"] - summary["skipped"]
         return summary
     
-    def _parse_surefire_report(self, report_file: Path) -> List[Dict]:
+    def _parse_surefire_report(self, report_file: Path, test_paths: List[str]) -> List[Dict]:
         """Parse a JUnit surefire XML report."""
         import xml.etree.ElementTree as ET
         
@@ -359,12 +483,17 @@ class TestRunner:
         root = tree.getroot()
         
         tests = []
+        test_file_path_abs = str(report_file.absolute())
+        source_file_path = self.test_to_source_map.get(test_file_path_abs)
+
         for testcase in root.findall("testcase"):
             test = {
                 "name": testcase.get("name"),
                 "classname": testcase.get("classname"),
                 "time": float(testcase.get("time", 0)),
-                "status": "passed"
+                "status": "passed",
+                "test_file_path": test_file_path_abs,
+                "source_file_path": source_file_path
             }
             
             failure = testcase.find("failure")

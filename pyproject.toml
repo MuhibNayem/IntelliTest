@@ -5,7 +5,7 @@ description = "AI-powered test automation agent"
 authors = ["Your Name <your.email@example.com>"]
 readme = "README.md"
 packages = [
-    { include = "ai-test-agent", from = "src" },
+    { include = "ai_test_agent", from = "src" },
 ]
 
 [tool.poetry.dependencies]

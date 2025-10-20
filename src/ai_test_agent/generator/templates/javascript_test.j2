@@ -1,0 +1,106 @@
+// Generated tests for {{ file_path }}
+const { expect } = require('chai');
+{% for imp in imports %}
+{{ imp }}
+{% endfor %}
+
+{% for class_info in classes %}
+describe('{{ class_info.name }}', () => {
+    {% for method in class_info.methods %}
+    {% if method.positive or method.negative or method.edge %}
+    describe('{{ method.name }}', () => {
+        const testCases = [
+            {% for test in method.positive %}
+            {
+                description: "{{ test.description }}",
+                inputs: {{ test.inputs | tojson }},
+                expected: {{ test.expected | tojson }},
+                assertion: "{{ test.assertion }}"
+            },
+            {% endfor %}
+            {% for test in method.negative %}
+            {
+                description: "{{ test.description }}",
+                inputs: {{ test.inputs | tojson }},
+                expected: {{ test.expected | tojson }},
+                assertion: "{{ test.assertion }}"
+            },
+            {% endfor %}
+            {% for test in method.edge %}
+            {
+                description: "{{ test.description }}",
+                inputs: {{ test.inputs | tojson }},
+                expected: {{ test.expected | tojson }},
+                assertion: "{{ test.assertion }}"
+            },
+            {% endfor %}
+        ];
+
+        test.each(testCases)('$description', ({ inputs, expected, assertion }) => {
+            const instance = new {{ class_info.name }}();
+            if (assertion === 'toThrow') {
+                expect(() => instance.{{ method.name }}(...Object.values(inputs))).to.throw(expected);
+            } else {
+                const result = instance.{{ method.name }}(...Object.values(inputs));
+                if (assertion === 'toEqual') {
+                    expect(result).to.equal(expected);
+                } else if (assertion === 'toBe') {
+                    expect(result).to.be(expected);
+                } else {
+                    expect(result).to.deep.equal(expected); // Default assertion
+                }
+            }
+        });
+    });
+    {% endif %}
+    {% endfor %}
+});
+{% endfor %}
+
+{% for func in functions %}
+{% if func.positive or func.negative or func.edge %}
+describe('{{ func.name }}', () => {
+    const testCases = [
+        {% for test in func.positive %}
+        {
+            description: "{{ test.description }}",
+            inputs: {{ test.inputs | tojson }},
+            expected: {{ test.expected | tojson }},
+            assertion: "{{ test.assertion }}"
+        },
+        {% endfor %}
+        {% for test in func.negative %}
+        {
+            description: "{{ test.description }}",
+            inputs: {{ test.inputs | tojson }},
+            expected: {{ test.expected | tojson }},
+            assertion: "{{ test.assertion }}"
+        },
+        {% endfor %}
+        {% for test in func.edge %}
+        {
+            description: "{{ test.description }}",
+            inputs: {{ test.inputs | tojson }},
+            expected: {{ test.expected | tojson }},
+            assertion: "{{ test.assertion }}"
+        },
+        {% endfor %}
+    ];
+
+    test.each(testCases)('$description', ({ inputs, expected, assertion }) => {
+        if (assertion === 'toThrow') {
+            expect(() => {{ func.name }}(...Object.values(inputs))).to.throw(expected);
+        } else {
+            const result = {{ func.name }}(...Object.values(inputs));
+            if (assertion === 'toEqual') {
+                expect(result).to.equal(expected);
+            } else if (assertion === 'toBe') {
+                expect(result).to.be(expected);
+            } else {
+                expect(result).to.deep.equal(expected); // Default assertion
+            }
+        }
+    });
+});
+{% endif %}
+{% endfor %}

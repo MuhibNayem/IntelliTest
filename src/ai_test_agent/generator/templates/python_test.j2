@@ -1,0 +1,83 @@
+{# Generated tests for {{ file_path }} #}
+import pytest
+{% for imp in imports %}
+{{ imp }}
+{% endfor %}
+
+{% for class_info in classes %}
+class Test{{ class_info.name }}:
+    {% for method in class_info.methods %}
+    {% if method.positive or method.negative or method.edge %}
+    @pytest.mark.parametrize(
+        "test_case",
+        [
+            {% for test in method.positive %}
+            pytest.param({{ test | tojson }}, id="{{ test.description }}"),
+            {% endfor %}
+            {% for test in method.negative %}
+            pytest.param({{ test | tojson }}, id="{{ test.description }}"),
+            {% endfor %}
+            {% for test in method.edge %}
+            pytest.param({{ test | tojson }}, id="{{ test.description }}"),
+            {% endfor %}
+        ]
+    )
+    def test_{{ method.name }}(self, test_case):
+        instance = {{ class_info.name }}()
+        inputs = test_case["inputs"]
+        expected = test_case["expected"]
+        assertion = test_case["assertion"]
+
+        if assertion == "assertRaises":
+            with pytest.raises(eval(expected)):
+                instance.{{ method.name }}(**inputs)
+        else:
+            result = instance.{{ method.name }}(**inputs)
+            if assertion == "assertEqual":
+                assert result == expected
+            elif assertion == "assertTrue":
+                assert result is True
+            elif assertion == "assertFalse":
+                assert result is False
+            else:
+                assert result == expected # Default assertion
+    {% endif %}
+    {% endfor %}
+{% endfor %}
+
+{% for func in functions %}
+{% if func.positive or func.negative or func.edge %}
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        {% for test in func.positive %}
+        pytest.param({{ test | tojson }}, id="{{ test.description }}"),
+        {% endfor %}
+        {% for test in func.negative %}
+        pytest.param({{ test | tojson }}, id="{{ test.description }}"),
+        {% endfor %}
+        {% for test in func.edge %}
+        pytest.param({{ test | tojson }}, id="{{ test.description }}"),
+        {% endfor %}
+    ]
+)
+def test_{{ func.name }}(test_case):
+    inputs = test_case["inputs"]
+    expected = test_case["expected"]
+    assertion = test_case["assertion"]
+
+    if assertion == "assertRaises":
+        with pytest.raises(eval(expected)):
+            {{ func.name }}(**inputs)
+    else:
+        result = {{ func.name }}(**inputs)
+        if assertion == "assertEqual":
+            assert result == expected
+        elif assertion == "assertTrue":
+            assert result is True
+        elif assertion == "assertFalse":
+            assert result is False
+        else:
+            assert result == expected # Default assertion
+{% endif %}
+{% endfor %}

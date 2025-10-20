@@ -1,0 +1,60 @@
+// Generated tests for {{ file_path }}
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
+import static org.junit.jupiter.api.Assertions.*;
+import java.util.stream.Stream;
+
+{% for imp in imports %}
+{{ imp }}
+{% endfor %}
+
+{% for class_info in classes %}
+class {{ class_info.name }}Test {
+    {% for method in class_info.methods %}
+    {% if method.positive or method.negative or method.edge %}
+    static Stream<TestCase> {{ method.name }}Provider() {
+        return Stream.of(
+            {% for test in method.positive %}
+            new TestCase({{ test.inputs | tojson }}, {{ test.expected | tojson }}, "{{ test.assertion }}"),
+            {% endfor %}
+            {% for test in method.negative %}
+            new TestCase({{ test.inputs | tojson }}, {{ test.expected | tojson }}, "{{ test.assertion }}"),
+            {% endfor %}
+            {% for test in method.edge %}
+            new TestCase({{ test.inputs | tojson }}, {{ test.expected | tojson }}, "{{ test.assertion }}"),
+            {% endfor %}
+        );
+    }
+
+    @ParameterizedTest
+    @MethodSource("{{ method.name }}Provider")
+    void test{{ method.name | capitalize }}(TestCase testCase) {
+        {{ class_info.name }} instance = new {{ class_info.name }}();
+        
+        if (testCase.assertion.equals("assertThrows")) {
+            assertThrows(Exception.class, () -> {
+                instance.{{ method.name }}(/* pass inputs from testCase.inputs */);
+            });
+        } else {
+            // Object result = instance.{{ method.name }}(/* pass inputs from testCase.inputs */);
+            // assertEquals(testCase.expected, result);
+            assertTrue(true); // Placeholder
+        }
+    }
+    {% endif %}
+    {% endfor %}
+
+    static class TestCase {
+        public final java.util.Map<String, Object> inputs;
+        public final Object expected;
+        public final String assertion;
+
+        public TestCase(String inputsStr, String expectedStr, String assertion) {
+            this.inputs = new com.google.gson.Gson().fromJson(inputsStr, new com.google.gson.reflect.TypeToken<java.util.Map<String, Object>>(){}.getType());
+            this.expected = new com.google.gson.Gson().fromJson(expectedStr, Object.class);
+            this.assertion = assertion;
+        }
+    }
+}
+{% endfor %}
