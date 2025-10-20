@@ -1,15 +1,15 @@
 import os
 import networkx as nx
 from pathlib import Path
-from typing import Dict, List, Set, Tuple, Optional
+from typing import Dict, Optional
 from .parser import CodeParser
 
 class ProjectAnalyzer:
     """Analyze project structure and dependencies."""
     
-    def __init__(self, project_path: str):
+    def __init__(self, project_path: str, parser: Optional[CodeParser] = None):
         self.project_path = Path(project_path)
-        self.parser = CodeParser()
+        self.parser = parser or CodeParser()
         self.dependency_graph = nx.DiGraph()
         self.file_info = {}
         self.business_logic = {}

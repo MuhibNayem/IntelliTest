@@ -4,12 +4,12 @@ This document outlines potential improvements for the AI Test Agent, broken down
 
 ## 1. Project Structure and Modularity
 
-### Task: Centralize Configuration
+### Task: Centralize Configuration [x]
 - **Description:** Consolidate all application settings (LLM model names, default paths, thresholds, API keys) into a single, easily manageable configuration system.
 - **Details:** Implement a `config.py` module or use a library like Pydantic's `BaseSettings` to define and load configurations from environment variables, `.env` files, or a dedicated configuration file (e.g., `config.yaml`).
 - **Priority:** High
 
-### Task: Implement Dependency Injection
+### Task: Implement Dependency Injection [x]
 - **Description:** Refactor component initialization to use a dependency injection pattern.
 - **Details:** Instead of components directly instantiating their dependencies (e.g., `TestAutomationAgent` creating `CodeParser`, `ProjectAnalyzer`), pass dependencies as arguments during initialization. This improves testability and flexibility.
 - **Priority:** Medium
@@ -34,14 +34,29 @@ This document outlines potential improvements for the AI Test Agent, broken down
 - **Details:** Integrate the `ConversationBufferMemory` with a persistent storage solution (e.g., a database, a file-based store, or a dedicated memory service).
 - **Priority:** Low
 
+### Task: Improve LLM Output Parsing for Agent Actions
+- **Description:** Enhance the robustness and flexibility of parsing the LLM's output to extract agent actions.
+- **Details:** Move beyond simple string matching to use structured output parsers (e.g., Pydantic-based) or more advanced regex to reliably identify tool calls and their arguments.
+- **Priority:** High
+
+### Task: Implement Advanced LangGraph Tool Calling
+- **Description:** Enhance the agent's ability to make more sophisticated decisions regarding tool usage within LangGraph.
+- **Details:** Implement more complex conditional routing, allowing the agent to choose between multiple tools, perform parallel tool execution, or engage in human-in-the-loop steps.
+- **Priority:** Medium
+
+### Task: Integrate User Feedback Loop
+- **Description:** Allow users to provide feedback to the agent to improve its performance and learning.
+- **Details:** Implement mechanisms for users to rate agent responses, correct tool usage, or tag important code components, feeding this information back into the agent's knowledge base or fine-tuning process.
+- **Priority:** Medium
+
 ## 3. `agent/tools.py` (Agent Tools)
 
-### Task: Add Input Validation to Tools
+### Task: Add Input Validation to Tools [x]
 - **Description:** Implement explicit validation for inputs received by each tool's `_run` and `_arun` methods.
 - **Details:** Use Pydantic models or simple type checks to ensure arguments conform to expected types and formats, preventing errors further down the execution chain.
 - **Priority:** Medium
 
-### Task: Improve Tool Descriptions
+### Task: Improve Tool Descriptions [x]
 - **Description:** Make tool descriptions more precise and comprehensive for the LLM.
 - **Details:** Clearly articulate the purpose, inputs, and expected outputs of each tool to help the LLM make better decisions on tool usage.
 - **Priority:** Medium
@@ -229,6 +244,16 @@ This document outlines potential improvements for the AI Test Agent, broken down
 ### Task: Implement Structured Logging
 - **Description:** Integrate a comprehensive and structured logging system throughout the application.
 - **Details:** Use Python's `logging` module with appropriate levels (DEBUG, INFO, WARNING, ERROR) and configure handlers for console output and file logging.
+- **Priority:** Medium
+
+### Task: Implement Comprehensive Error Handling
+- **Description:** Replace generic exception handling with more specific error types and provide informative error messages across the application.
+- **Details:** Identify potential failure points in each module (e.g., file operations, LLM calls, tool execution) and implement targeted exception handling to improve robustness and user feedback.
+- **Priority:** High
+
+### Task: Optimize for Scalability with Large Projects
+- **Description:** Improve the agent's performance and resource utilization when dealing with very large codebases.
+- **Details:** Investigate and implement strategies such as incremental analysis, distributed processing for parsing and analysis, and efficient data storage for project metadata and dependency graphs.
 - **Priority:** Medium
 
 ### Task: Increase Unit and Integration Test Coverage

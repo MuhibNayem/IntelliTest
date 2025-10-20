@@ -1,7 +1,8 @@
 import json
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Type
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
+from pathlib import Path
 
 from ..explorer.file_tools import FileTools
 from ..explorer.analyzer import ProjectAnalyzer
@@ -13,7 +14,12 @@ from ..reporting.aggregator import ResultsAggregator
 class ReadFileTool(BaseTool):
     """Tool for reading files."""
     name = "read_file"
-    description = "Read the contents of a file"
+    description = "Reads the content of a specified file. Input is 'file_path' (string), the absolute or relative path to the file. Returns the file content as a string."
+
+    class InputSchema(BaseModel):
+        file_path: str = Field(..., description="The path to the file to read")
+
+    args_schema: Optional[Type[BaseModel]] = InputSchema
     
     def __init__(self, file_tools: FileTools):
         super().__init__()
@@ -32,7 +38,13 @@ class ReadFileTool(BaseTool):
 class WriteFileTool(BaseTool):
     """Tool for writing files."""
     name = "write_file"
-    description = "Write content to a file"
+    description = "Writes content to a specified file. Input is 'file_path' (string) for the target file and 'content' (string) to write. Returns 'Success' or 'Failed'."
+
+    class InputSchema(BaseModel):
+        file_path: str = Field(..., description="The path to the file to write")
+        content: str = Field(..., description="The content to write to the file")
+
+    args_schema: Optional[Type[BaseModel]] = InputSchema
     
     def __init__(self, file_tools: FileTools):
         super().__init__()
@@ -53,7 +65,13 @@ class WriteFileTool(BaseTool):
 class ListFilesTool(BaseTool):
     """Tool for listing files."""
     name = "list_files"
-    description = "List files in a directory"
+    description = "Lists files in a given directory. Input is 'directory' (optional string, defaults to current working directory) and 'pattern' (optional string, glob pattern like '*.py', defaults to '*' for all files). Returns a JSON string of a list of file paths."
+
+    class InputSchema(BaseModel):
+        directory: Optional[str] = Field(None, description="The directory to list files from. Defaults to current working directory.")
+        pattern: str = Field("*", description="Glob pattern to filter files (e.g., '*.py', 'src/**/*.js'). Defaults to '*' (all files).")
+
+    args_schema: Optional[Type[BaseModel]] = InputSchema
     
     def __init__(self, file_tools: FileTools):
         super().__init__()
@@ -74,7 +92,13 @@ class ListFilesTool(BaseTool):
 class RunCommandTool(BaseTool):
     """Tool for running shell commands."""
     name = "run_command"
-    description = "Run a shell command"
+    description = "Executes a shell command. Input is 'command' (string) to run and 'cwd' (optional string, current working directory, defaults to project root). Returns a JSON string with 'exit_code', 'stdout', and 'stderr'."
+
+    class InputSchema(BaseModel):
+        command: str = Field(..., description="The shell command to run")
+        cwd: Optional[str] = Field(None, description="The current working directory for the command. Defaults to project root.")
+
+    args_schema: Optional[Type[BaseModel]] = InputSchema
     
     def __init__(self, file_tools: FileTools):
         super().__init__()
@@ -103,7 +127,12 @@ class RunCommandTool(BaseTool):
 class AnalyzeProjectTool(BaseTool):
     """Tool for analyzing project structure."""
     name = "analyze_project"
-    description = "Analyze the project structure and identify components"
+    description = "Analyzes the project structure, identifies components, classes, functions, and dependencies. Input is 'project_path' (optional string, defaults to agent's configured project path). Returns a JSON string containing detailed project analysis."
+
+    class InputSchema(BaseModel):
+        project_path: Optional[str] = Field(None, description="The path to the project to analyze. Defaults to the agent's configured project path.")
+
+    args_schema: Optional[Type[BaseModel]] = InputSchema
     
     def __init__(self, analyzer: ProjectAnalyzer):
         super().__init__()
@@ -123,7 +152,13 @@ class AnalyzeProjectTool(BaseTool):
 class GenerateTestsTool(BaseTool):
     """Tool for generating tests."""
     name = "generate_tests"
-    description = "Generate tests for the project"
+    description = "Generates test files based on a provided project analysis. Input is 'project_analysis' (JSON string from analyze_project tool) and 'output_dir' (optional string, directory to save tests, defaults to 'tests'). Returns a JSON string mapping source files to generated test files."
+
+    class InputSchema(BaseModel):
+        project_analysis: str = Field(..., description="JSON string of the project analysis, typically obtained from the analyze_project tool.")
+        output_dir: Optional[str] = Field("tests", description="Directory to save generated tests. Defaults to 'tests'.")
+
+    args_schema: Optional[Type[BaseModel]] = InputSchema
     
     def __init__(self, test_generator: TestGenerator):
         super().__init__()
@@ -151,7 +186,12 @@ class GenerateTestsTool(BaseTool):
 class RunTestsTool(BaseTool):
     """Tool for running tests."""
     name = "run_tests"
-    description = "Run tests and collect results"
+    description = "Runs tests for the project and collects results. Input is 'test_paths' (optional JSON string of a list of specific test file paths). If not provided, all detected tests will be run. Returns a JSON string with test results summary and details."
+
+    class InputSchema(BaseModel):
+        test_paths: Optional[str] = Field(None, description="JSON string of a list of specific test file paths to run. If not provided, all detected tests will be run.")
+
+    args_schema: Optional[Type[BaseModel]] = InputSchema
     
     def __init__(self, test_runner: TestRunner):
         super().__init__()
@@ -180,7 +220,13 @@ class RunTestsTool(BaseTool):
 class GenerateReportTool(BaseTool):
     """Tool for generating test reports."""
     name = "generate_report"
-    description = "Generate a test report"
+    description = "Generates an HTML test report from aggregated test results. Input is 'test_results' (JSON string of aggregated test results from run_tests tool) and 'output_file' (optional string, path for the HTML report, defaults to 'test_report.html'). Returns the absolute path to the generated report file."
+
+    class InputSchema(BaseModel):
+        test_results: str = Field(..., description="JSON string of the aggregated test results, typically obtained from the run_tests tool.")
+        output_file: Optional[str] = Field("test_report.html", description="Path to the output HTML report file. Defaults to 'test_report.html'.")
+
+    args_schema: Optional[Type[BaseModel]] = InputSchema
     
     def __init__(self, aggregator: ResultsAggregator):
         super().__init__()

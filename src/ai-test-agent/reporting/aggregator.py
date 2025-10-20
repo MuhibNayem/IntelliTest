@@ -1,16 +1,16 @@
-import json
-from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Dict, List
 from datetime import datetime
 from .reporter import TestReporter
 from .coverage import CoverageAnalyzer
+from ..config import Settings, settings
 
 class ResultsAggregator:
     """Aggregate test results and generate reports."""
     
-    def __init__(self):
-        self.reporter = TestReporter()
-        self.coverage_analyzer = CoverageAnalyzer()
+    def __init__(self, settings_obj: Settings = settings):
+        self.settings = settings_obj
+        self.reporter = TestReporter(self.settings)
+        self.coverage_analyzer = CoverageAnalyzer(self.settings)
     
     def aggregate_results(self, test_results: List[Dict]) -> Dict:
         """Aggregate multiple test results into a single summary."""
@@ -62,7 +62,7 @@ class ResultsAggregator:
             "details": detailed_results
         }
     
-    def generate_report(self, test_results: Dict, output_file: str = "test_report.html") -> str:
+    def generate_report(self, test_results: Dict, output_file: str = str(settings.report_output_file)) -> str:
         """Generate a test report."""
         # If test_results is a single result, convert to list
         if isinstance(test_results, dict) and "summary" in test_results:
@@ -76,7 +76,7 @@ class ResultsAggregator:
         
         return report_path
     
-    def generate_coverage_report(self, project_path: str, output_file: str = "coverage_report.html") -> str:
+    def generate_coverage_report(self, project_path: str, output_file: str = str(settings.coverage_output_file)) -> str:
         """Generate a coverage report."""
         coverage_data = self.coverage_analyzer.analyze_coverage(project_path)
         report_path = self.coverage_analyzer.generate_html_report(coverage_data, output_file)

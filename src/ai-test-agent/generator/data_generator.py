@@ -1,8 +1,7 @@
 import random
 import string
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Union
-import json
+from typing import Any, Dict, List
 
 class TestDataGenerator:
     """Generate test data for various types and scenarios."""

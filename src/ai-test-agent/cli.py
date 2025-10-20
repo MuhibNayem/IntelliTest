@@ -1,9 +1,7 @@
-
-import json
-from typing import Optional
 import click
 
 from .agent.agent import TestAutomationAgent
+from .config import settings
 
 
 @click.group()
@@ -13,14 +11,14 @@ def main():
 
 
 @main.command()
-@click.option('--project-path', required=True, type=click.Path(exists=True), help='Path to the project to analyze.')
-@click.option('--output', default='analysis.json', help='Path to the output JSON file.')
+@click.option('--project-path', type=click.Path(exists=True), default=str(settings.project_root), help='Path to the project to analyze.')
+@click.option('--output', default=str(settings.analysis_output_file), help='Path to the output JSON file.')
 def analyze(project_path: str, output: str):
     """
     Analyze a project and save the analysis to a JSON file.
     """
     click.echo(f"Analyzing project at {project_path}...")
-    agent = TestAutomationAgent(project_path=project_path)
+    agent = TestAutomationAgent(project_path=Path(project_path), settings_obj=settings)
     result = agent.analyze_project()
 
     if result["success"]:
@@ -32,14 +30,14 @@ def analyze(project_path: str, output: str):
 
 
 @main.command()
-@click.option('--project-path', required=True, type=click.Path(exists=True), help='Path to the project.')
-@click.option('--output-dir', default='tests', help='Directory to save generated tests.')
+@click.option('--project-path', type=click.Path(exists=True), default=str(settings.project_root), help='Path to the project.')
+@click.option('--output-dir', default=str(settings.tests_output_dir), help='Directory to save generated tests.')
 def generate(project_path: str, output_dir: str):
     """
     Generate tests for a project.
     """
     click.echo(f"Generating tests for project at {project_path}...")
-    agent = TestAutomationAgent(project_path=project_path)
+    agent = TestAutomationAgent(project_path=Path(project_path), settings_obj=settings)
     result = agent.generate_tests(output_dir)
 
     if result["success"]:
@@ -51,14 +49,14 @@ def generate(project_path: str, output_dir: str):
 
 
 @main.command()
-@click.option('--project-path', required=True, type=click.Path(exists=True), help='Path to the project.')
-@click.option('--output', default='results.json', help='Path to the output JSON file.')
+@click.option('--project-path', type=click.Path(exists=True), default=str(settings.project_root), help='Path to the project.')
+@click.option('--output', default=str(settings.results_output_file), help='Path to the output JSON file.')
 def run(project_path: str, output: str):
     """
     Run tests for a project.
     """
     click.echo("Running tests...")
-    agent = TestAutomationAgent(project_path=project_path)
+    agent = TestAutomationAgent(project_path=Path(project_path), settings_obj=settings)
     result = agent.run_tests()
 
     if result["success"]:
@@ -74,15 +72,15 @@ def run(project_path: str, output: str):
 
 
 @main.command()
-@click.option('--project-path', required=True, type=click.Path(exists=True), help='Path to the project.')
+@click.option('--project-path', type=click.Path(exists=True), default=str(settings.project_root), help='Path to the project.')
 @click.option('--test-results', required=True, type=click.Path(exists=True), help='Path to the test results JSON file.')
-@click.option('--output', default='report.html', help='Path to the output HTML report file.')
+@click.option('--output', default=str(settings.report_output_file), help='Path to the output HTML report file.')
 def report(project_path: str, test_results: str, output: str):
     """
     Generate a report from test results.
     """
     click.echo("Generating report...")
-    agent = TestAutomationAgent(project_path=project_path)
+    agent = TestAutomationAgent(project_path=Path(project_path), settings_obj=settings)
 
     with open(test_results, "r") as f:
         results = json.load(f)
@@ -94,13 +92,13 @@ def report(project_path: str, test_results: str, output: str):
 
 
 @main.command()
-@click.option('--project-path', required=True, type=click.Path(exists=True), help='Path to the project.')
+@click.option('--project-path', type=click.Path(exists=True), default=str(settings.project_root), help='Path to the project.')
 def all(project_path: str):
     """
     Run the complete workflow (analyze, generate, run, and report).
     """
     click.echo(f"Running complete test automation workflow for project at {project_path}...")
-    agent = TestAutomationAgent(project_path=project_path)
+    agent = TestAutomationAgent(project_path=Path(project_path), settings_obj=settings)
 
     # Step 1: Analyze project
     click.echo("Step 1: Analyzing project...")
@@ -111,7 +109,7 @@ def all(project_path: str):
 
     # Step 2: Generate tests
     click.echo("Step 2: Generating tests...")
-    test_result = agent.generate_tests("tests")
+    test_result = agent.generate_tests(str(settings.tests_output_dir))
     if not test_result["success"]:
         click.echo(f"Error in test generation: {test_result['error']}")
         return
@@ -125,7 +123,7 @@ def all(project_path: str):
 
     # Step 4: Generate report
     click.echo("Step 4: Generating report...")
-    report_result = agent.generate_report(run_result["results"], "test_report.html")
+    report_result = agent.generate_report(run_result["results"], str(settings.report_output_file))
     if not report_result["success"]:
         click.echo(f"Error in report generation: {report_result['error']}")
         return
@@ -136,22 +134,22 @@ def all(project_path: str):
 
 
 @main.command()
-@click.option('--project-path', required=True, type=click.Path(exists=True), help='Path to the project.')
+@click.option('--project-path', type=click.Path(exists=True), default=str(settings.project_root), help='Path to the project.')
 def interactive(project_path: str):
     """
     Start the agent in interactive mode.
     """
     click.echo("Starting interactive session...")
     click.echo("Type 'exit' to quit.")
-    agent = TestAutomationAgent(project_path=project_path)
+    agent = TestAutomationAgent(project_path=Path(project_path), settings_obj=settings)
 
     while True:
         user_input = click.prompt("\nYou>")
         if user_input.lower() in ["exit", "quit"]:
             break
 
-        result = agent.run(user_input)
-        if result["success"]:
-            click.echo(f"Agent: {result['result']}")
+        result_dict = agent.run(user_input)
+        if result_dict["success"]:
+            click.echo(f"Agent: {result_dict['result']}")
         else:
-            click.echo(f"Error: {result['error']}")
+            click.echo(f"Error: {result_dict['error']}")

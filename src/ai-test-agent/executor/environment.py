@@ -1,14 +1,15 @@
 import os
-import subprocess
 import asyncio
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Union
+from ..config import Settings, settings
 
 class TestEnvironment:
     """Setup and manage test execution environment."""
     
-    def __init__(self, project_path: Union[str, Path]):
-        self.project_path = Path(project_path)
+    def __init__(self, project_path: Union[str, Path] = None, settings_obj: Settings = settings):
+        self.settings = settings_obj
+        self.project_path = Path(project_path) if project_path else self.settings.project_root
         self.original_env = os.environ.copy()
         self.temp_env = {}
         self.created_files = []

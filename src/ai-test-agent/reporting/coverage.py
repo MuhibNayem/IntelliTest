@@ -1,15 +1,16 @@
-import os
 import json
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Dict, List
 from .reporter import TestReporter
+from ..config import Settings, settings
 
 class CoverageAnalyzer:
     """Analyze code coverage and generate reports."""
     
-    def __init__(self):
-        self.reporter = TestReporter()
+    def __init__(self, settings_obj: Settings = settings):
+        self.settings = settings_obj
+        self.reporter = TestReporter(self.settings)
     
     def analyze_coverage(self, project_path: str) -> Dict:
         """Analyze code coverage for a project."""

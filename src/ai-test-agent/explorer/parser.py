@@ -1,7 +1,5 @@
-import os
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
-import tree_sitter
+from typing import Dict, List, Union
 from tree_sitter import Language, Parser
 
 # Initialize parsers for different languages

@@ -1,9 +1,7 @@
-import os
-import subprocess
 import asyncio
 import aiofiles
 from pathlib import Path
-from typing import Dict, List, Optional, Union, Tuple
+from typing import Dict, List, Union, Tuple
 
 class FileTools:
     """Tools for file operations and terminal commands."""

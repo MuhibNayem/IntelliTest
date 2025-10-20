@@ -1,25 +1,23 @@
-import os
 import json
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
-from jinja2 import Environment, FileSystemLoader, Template
+from typing import Dict, List
+from jinja2 import Environment, FileSystemLoader
 from langchain_community.llms import Ollama
-from langchain_core.prompts import PromptTemplate
-from langchain.chains.llm import LLMChain
+from ..config import Settings, settings
 
 class TestGenerator:
     """Generate test cases based on code analysis."""
     
-    def __init__(self, model_name: str = "gpt-oss-20b"):
-        self.model_name = model_name
-        self.llm = Ollama(model=model_name)
+    def __init__(self, llm_model_name: str = settings.llm_model_name, settings_obj: Settings = settings):
+        self.settings = settings_obj
+        self.llm = Ollama(model=llm_model_name)
         self.templates_dir = Path(__file__).parent / "templates"
         self.env = Environment(loader=FileSystemLoader(self.templates_dir))
 
     
 
     
-    def generate_tests(self, project_analysis: Dict, output_dir: str = "tests") -> Dict:
+    def generate_tests(self, project_analysis: Dict, output_dir: str = str(settings.tests_output_dir)) -> Dict:
         """Generate test files based on project analysis."""
         output_path = Path(output_dir)
         output_path.mkdir(exist_ok=True)

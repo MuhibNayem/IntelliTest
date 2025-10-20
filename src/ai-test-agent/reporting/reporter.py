@@ -1,12 +1,14 @@
 import json
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Dict
 from datetime import datetime
+from ..config import Settings, settings
 
 class TestReporter:
     """Generate test reports in various formats."""
     
-    def __init__(self):
+    def __init__(self, settings_obj: Settings = settings):
+        self.settings = settings_obj
         self.templates_dir = Path(__file__).parent.parent / "templates"
         self.templates_dir.mkdir(exist_ok=True)
         self._setup_templates()
@@ -275,8 +277,10 @@ class TestReporter:
         with open(self.templates_dir / "html_report.j2", "w") as f:
             f.write(html_template)
     
-    def generate_html_report(self, test_results: Dict, output_file: str = "test_report.html") -> str:
+    def generate_html_report(self, test_results: Dict, output_file: str = None) -> str:
         """Generate an HTML test report."""
+        if output_file is None:
+            output_file = self.settings.report_output_file
         from jinja2 import Environment, FileSystemLoader
         
         # Setup template environment
@@ -297,8 +301,10 @@ class TestReporter:
         
         return str(report_path.absolute())
     
-    def generate_json_report(self, test_results: Dict, output_file: str = "test_report.json") -> str:
+    def generate_json_report(self, test_results: Dict, output_file: str = None) -> str:
         """Generate a JSON test report."""
+        if output_file is None:
+            output_file = self.settings.results_output_file
         report_path = Path(output_file)
         
         with open(report_path, "w") as f:
@@ -306,8 +312,10 @@ class TestReporter:
         
         return str(report_path.absolute())
     
-    def generate_xml_report(self, test_results: Dict, output_file: str = "test_report.xml") -> str:
+    def generate_xml_report(self, test_results: Dict, output_file: str = None) -> str:
         """Generate an XML test report (JUnit format)."""
+        if output_file is None:
+            output_file = self.settings.xml_report_output_file
         from xml.etree.ElementTree import Element, SubElement, tostring
         from xml.dom import minidom
         

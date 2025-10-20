@@ -1,17 +1,17 @@
-import os
-import subprocess
 import asyncio
 import json
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List
 from .environment import TestEnvironment
+from ..config import Settings, settings
 
 class TestRunner:
     """Run tests and collect results."""
     
-    def __init__(self, project_path: str = None):
-        self.project_path = Path(project_path) if project_path else Path.cwd()
-        self.test_env = TestEnvironment(self.project_path)
+    def __init__(self, project_path: str = None, settings_obj: Settings = settings):
+        self.settings = settings_obj
+        self.project_path = Path(project_path) if project_path else self.settings.project_root
+        self.test_env = TestEnvironment(self.project_path, self.settings)
         self.results = {}
     
     async def run_tests(self, test_paths: List[str] = None, framework: str = "auto") -> Dict:

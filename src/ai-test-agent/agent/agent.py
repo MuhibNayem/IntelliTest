@@ -1,14 +1,11 @@
-import os
-import json
 from pathlib import Path
-from typing import Dict, List, Optional, Union
-from langchain.agents import AgentExecutor, create_react_agent
-from langchain_core.agents import AgentAction, AgentFinish
+from typing import Dict, List, Optional, TypedDict, Annotated, Union
 from langchain_core.tools import Tool
-from langchain.memory import ConversationBufferMemory
-from langchain_community.llms import Ollama
-from langchain_core.prompts import StringPromptTemplate
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.agents import AgentAction
+from langchain_community.llms import ollama
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+from langgraph.graph import StateGraph, END
+from langgraph.checkpoint.memory import MemorySaver
 
 from ..explorer.parser import CodeParser
 from ..explorer.analyzer import ProjectAnalyzer
@@ -28,32 +25,48 @@ from .tools import (
     GenerateReportTool
 )
 from .prompts import CUSTOM_PROMPT
+from ..config import Settings, settings
+
+class AgentState(TypedDict):
+    messages: Annotated[List[BaseMessage], lambda x, y: x + y]
 
 class TestAutomationAgent:
     """Main agent for test automation."""
     
-    def __init__(self, model_name: str = "gpt-oss-20b", project_path: str = None):
-        self.model_name = model_name
-        self.project_path = Path(project_path) if project_path else Path.cwd()
+    def __init__(
+        self,
+        project_path: Optional[Path] = None,
+        llm_model_name: str = settings.llm_model_name,
+        parser: Optional[CodeParser] = None,
+        analyzer: Optional[ProjectAnalyzer] = None,
+        file_tools: Optional[FileTools] = None,
+        test_generator: Optional[TestGenerator] = None,
+        data_generator: Optional[TestDataGenerator] = None,
+        test_runner: Optional[TestRunner] = None,
+        results_aggregator: Optional[ResultsAggregator] = None,
+        settings_obj: Settings = settings,
+    ):
+        self.settings = settings_obj
+        self.project_path = project_path or self.settings.project_root
         
-        # Initialize components
-        self.llm = Ollama(model=model_name)
-        self.parser = CodeParser()
-        self.analyzer = ProjectAnalyzer(str(self.project_path))
-        self.file_tools = FileTools(str(self.project_path))
-        self.test_generator = TestGenerator(model_name)
-        self.data_generator = TestDataGenerator()
-        self.test_runner = TestRunner(str(self.project_path))
-        self.results_aggregator = ResultsAggregator()
+        # Initialize components with dependency injection
+        self.llm = ollama(model=llm_model_name)
+        self.parser = parser or CodeParser()
+        self.analyzer = analyzer or ProjectAnalyzer(str(self.project_path), self.parser)
+        self.file_tools = file_tools or FileTools(str(self.project_path))
+        self.test_generator = test_generator or TestGenerator(llm_model_name)
+        self.data_generator = data_generator or TestDataGenerator()
+        self.test_runner = test_runner or TestRunner(str(self.project_path), self.settings)
+        self.results_aggregator = results_aggregator or ResultsAggregator(self.settings)
         
         # Initialize tools
         self.tools = self._initialize_tools()
         
         # Initialize agent
-        self.agent_executor = self._initialize_agent()
+        self.agent = self._initialize_agent()
         
-        # Initialize memory
-        self.memory = ConversationBufferMemory(memory_key="chat_history")
+        # Initialize memory saver for LangGraph
+        self.memory_saver = MemorySaver()
     
     def _initialize_tools(self) -> List[Tool]:
         """Initialize the tools for the agent."""
@@ -68,33 +81,117 @@ class TestAutomationAgent:
             GenerateReportTool(self.results_aggregator)
         ]
     
-    def _initialize_agent(self) -> AgentExecutor:
-        """Initialize the agent."""
-        # Create the agent prompt
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", CUSTOM_PROMPT),
-            ("human", "{input}"),
-            ("placeholder", "{agent_scratchpad}")
-        ])
+    def _parse_agent_output(self, llm_output: str) -> Union[AgentAction, Dict]:
+        """Parse the LLM's output to extract an AgentAction or a final response."""
+        # This is a simplified parser. A more robust one would use regex or a structured output parser.
+        if "Action:" in llm_output and "Action Input:" in llm_output:
+            try:
+                action_start = llm_output.find("Action:") + len("Action:")
+                action_end = llm_output.find("Action Input:")
+                action = llm_output[action_start:action_end].strip()
+
+                action_input_start = action_end + len("Action Input:")
+                action_input = llm_output[action_input_start:].strip()
+                
+                # Assuming tool names are simple strings
+                return AgentAction(tool=action, tool_input=action_input, log=llm_output)
+            except Exception:
+                pass # Fallback to treating as final answer
         
-        # Create the agent
-        agent = create_react_agent(self.llm, self.tools, prompt)
+        return {"output": llm_output} # Treat as final answer
 
-        # Create the agent executor
-        agent_executor = AgentExecutor(
-            agent=agent,
-            tools=self.tools,
-            verbose=True,
-            memory=self.memory
+    def _agent_node(self, state: AgentState) -> Dict:
+        """Agent node for LangGraph."""
+        # The LLM is invoked with the current messages and tools
+        # It should output a thought, then an action or a final answer.
+        llm_output = self.llm.invoke(state["messages"] + [HumanMessage(content=f"Available tools: {self.tools}")])
+        
+        parsed_output = self._parse_agent_output(llm_output.content)
+
+        if isinstance(parsed_output, AgentAction):
+            return {"messages": [AIMessage(content="", additional_kwargs={"action": parsed_output})]}
+        else:
+            return {"messages": [AIMessage(content=parsed_output["output"])]}
+
+    def _tool_node(self, state: AgentState) -> Dict:
+        """Tool node for LangGraph."""
+        last_message = state["messages"][-1]
+        if isinstance(last_message, AIMessage) and "action" in last_message.additional_kwargs:
+            action = last_message.additional_kwargs["action"]
+            tool_name = action.tool
+            tool_input = action.tool_input
+            
+            # Find and execute the tool
+            for tool in self.tools:
+                if tool.name == tool_name:
+                    observation = tool.run(tool_input)
+                    return {"messages": [AIMessage(content=f"Observation: {observation}")]}
+            return {"messages": [AIMessage(content=f"Error: Tool {tool_name} not found.")]}
+        return {"messages": [AIMessage(content="Error: No tool action found in last message.")]}
+
+    def _should_continue(self, state: AgentState) -> str:
+        """Decide whether to continue in the graph or end."""
+        last_message = state["messages"][-1]
+        if isinstance(last_message, AIMessage) and "action" in last_message.additional_kwargs:
+            return "continue" # Continue to tool node
+        return "end" # End with final answer
+
+    def _initialize_agent(self):
+        """Initialize the agent using LangGraph."""
+        # Define the graph
+        workflow = StateGraph(AgentState)
+
+        # Add the agent node
+        workflow.add_node("agent", self._agent_node)
+
+        # Add the tool node
+        workflow.add_node("tools", self._tool_node)
+
+        # Set the entry point
+        workflow.set_entry_point("agent")
+
+        # Add conditional edges
+        workflow.add_conditional_edges(
+            "agent",
+            self._should_continue,
+            {
+                "continue": "tools",
+                "end": END
+            }
         )
+        workflow.add_edge("tools", "agent") # After tool execution, go back to agent
 
-        return agent_executor
+        # Compile the graph with memory
+        app = workflow.compile(checkpointer=self.memory_saver)
+        return app
 
     def run(self, input_text: str) -> Dict:
         """Run the agent with the given input."""
         try:
-            result = self.agent_executor.invoke({"input": input_text})
-            return {"success": True, "result": result}
+            # LangGraph app expects a list of BaseMessage
+            user_message = HumanMessage(content=input_text)
+            
+            # Use a fixed thread_id for now, or generate/manage dynamically
+            # For interactive mode, a single thread_id is sufficient.
+            thread_id = "interactive_session" 
+            
+            config = {"configurable": {"thread_id": thread_id}}
+            
+            # Invoke the compiled LangGraph app
+            # The input is a dict with "messages" key, containing a list of BaseMessage
+            result = self.agent.invoke({"messages": [user_message]}, config=config)
+            
+            # The result from LangGraph is typically a dict with a "messages" key
+            # containing the updated list of messages.
+            # We need to extract the last AI message.
+            last_ai_message = ""
+            if "messages" in result and result["messages"]:
+                for msg in reversed(result["messages"]):
+                    if isinstance(msg, AIMessage):
+                        last_ai_message = msg.content
+                        break
+            
+            return {"success": True, "result": last_ai_message}
         except Exception as e:
             return {"success": False, "error": str(e)}
     
