@@ -1,0 +1,38 @@
+[tool.poetry]
+name = "ai-test-agent"
+version = "0.1.0"
+description = "AI-powered test automation agent"
+authors = ["Your Name <your.email@example.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+langchain = "^0.0.312"
+ollama = "^0.1.7"
+playwright = "^1.40.0"
+click = "^8.1.7"
+rich = "^13.6.0"
+pydantic = "^2.4.2"
+pytest = "^7.4.3"
+pytest-asyncio = "^0.21.1"
+networkx = "^3.2.1"
+tree-sitter = "^0.20.2"
+tree-sitter-python = "^0.20.4"
+tree-sitter-javascript = "^0.20.1"
+tree-sitter-java = "^0.20.2"
+jinja2 = "^3.1.2"
+aiofiles = "^23.2.1"
+coverage = "^7.3.2"
+
+[tool.poetry.group.dev.dependencies]
+black = "^23.10.1"
+isort = "^5.12.0"
+flake8 = "^6.1.0"
+mypy = "^1.6.1"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+ai-test-agent = "ai_test_agent.cli:main"
