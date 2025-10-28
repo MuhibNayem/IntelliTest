@@ -1,0 +1,42 @@
+{
+  "last_user_input": "/exit",
+  "last_agent_response": null,
+  "last_file_path": null,
+  "last_snippet": null,
+  "last_tool": {
+    "name": null,
+    "input": null,
+    "observation": null,
+    "success": true,
+    "error": null
+  },
+  "snippets": [],
+  "next_snippet_id": 1,
+  "threads": {
+    "interactive": {
+      "thread_id": "interactive",
+      "created_at": "2025-10-28T13:20:31.865184",
+      "metadata": {
+        "project_root": "/home/amnayem/Projects/IntelliTest"
+      },
+      "messages": [
+        {
+          "role": "user",
+          "content": "hi",
+          "timestamp": "2025-10-28T13:20:34.106551",
+          "attachments": []
+        },
+        {
+          "role": "assistant",
+          "content": "(error) An unexpected error occurred: '\"pattern\"'",
+          "timestamp": "2025-10-28T13:20:34.112670",
+          "attachments": []
+        }
+      ],
+      "tool_events": []
+    }
+  },
+  "active_thread_id": "interactive",
+  "workspace_directories": [],
+  "editing_mode": "emacs"
+}

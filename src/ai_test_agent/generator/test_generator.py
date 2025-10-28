@@ -1,8 +1,8 @@
+import asyncio
 import ast
 import json
 import logging
 import re
-import aiofiles
 from pathlib import Path
 from typing import Any, Dict, Union
 from jinja2 import Environment, FileSystemLoader
@@ -258,8 +258,10 @@ class TestGenerator:
         """Apply an AI-suggested fix to a test file."""
         try:
             # Read the current content of the test file
-            async with aiofiles.open(test_file_path, "r") as f:
-                current_content = await f.read()
+            def _read() -> str:
+                return test_file_path.read_text()
+
+            current_content = await asyncio.to_thread(_read)
 
             # Apply the fix based on the suggestion type
             modification_type = fix_suggestion.get("modification_type")
@@ -288,8 +290,10 @@ class TestGenerator:
                 return {"success": False, "error": f"Unsupported modification type: {modification_type}"}
 
             # Write the updated content back to the file
-            async with aiofiles.open(test_file_path, "w") as f:
-                await f.write(updated_content)
+            def _write() -> None:
+                test_file_path.write_text(updated_content)
+
+            await asyncio.to_thread(_write)
             
             return {"success": True, "message": f"Successfully applied fix to {test_file_path}."}
         except Exception as e:

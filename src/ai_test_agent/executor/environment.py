@@ -17,6 +17,7 @@ class TestEnvironment:
         self.temp_env = {}
         self.created_files = []
         self.created_dirs = []
+        self._dependencies_installed = False
     
     async def setup(self):
         """Setup the test environment."""
@@ -52,6 +53,9 @@ class TestEnvironment:
 
     async def _install_dependencies(self):
         """Install dependencies needed for testing."""
+        if self._dependencies_installed:
+            return
+
         if (self.project_path / "poetry.lock").exists() and (self.project_path / "pyproject.toml").exists():
             print("Installing dependencies from poetry.lock")
             process = await asyncio.create_subprocess_exec(
@@ -100,6 +104,8 @@ class TestEnvironment:
                 stderr=asyncio.subprocess.PIPE
             )
             await process.communicate()
+
+        self._dependencies_installed = True
     
     async def _run_in_docker(self, command: List[str]) -> asyncio.subprocess.Process:
         """Run a command inside a Docker container."""

@@ -1,5 +1,7 @@
+import asyncio
 import json
-from typing import Optional
+from threading import Thread
+from typing import Dict, Optional, Iterable
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 
@@ -8,6 +10,88 @@ from ..explorer.analyzer import ProjectAnalyzer
 from ..generator.test_generator import TestGenerator
 from ..executor.test_runner import TestRunner
 from ..reporting.aggregator import ResultsAggregator
+
+
+def _run_coroutine_sync(coro):
+    """Execute an asyncio coroutine from sync context, even if a loop is running."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    result_container = {}
+    error_container = {}
+
+    def _runner():
+        try:
+            result_container["value"] = asyncio.run(coro)
+        except Exception as exc:  # pragma: no cover - propagate outside loop context
+            error_container["error"] = exc
+
+    thread = Thread(target=_runner, daemon=True)
+    thread.start()
+    thread.join()
+
+    if "error" in error_container:
+        raise error_container["error"]
+    return result_container.get("value")
+
+
+_DANGEROUS_TOKENS = {
+    "rm",
+    "del",
+    "shutdown",
+    "reboot",
+    "mkfs",
+    "dd",
+    ">",
+    "|",
+    "&&",
+    ";",
+}
+
+
+def _validate_shell_command(command: str) -> None:
+    """Best-effort guard against destructive shell commands."""
+    lowered = command.lower()
+    if any(token in lowered for token in _DANGEROUS_TOKENS):
+        raise ValueError(
+            "Command rejected for safety. Use manual shell access for potentially destructive operations."
+        )
+
+
+def _coerce_params(
+    args: Iterable,
+    kwargs: Dict,
+    *,
+    defaults: Optional[Dict] = None,
+    positional_key: Optional[str] = None,
+) -> Dict:
+    params: Dict = dict(defaults or {})
+    params.update(kwargs or {})
+    if not kwargs and args:
+        # Only consider the first positional argument for these simple tools.
+        first = args[0]
+        if isinstance(first, dict):
+            params.update(first)
+        elif isinstance(first, str):
+            try:
+                parsed = json.loads(first)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, dict):
+                params.update(parsed)
+            elif positional_key:
+                params[positional_key] = first
+        elif positional_key:
+            params[positional_key] = first
+    return params
+
+
+def _ensure_required(params: Dict, required: Iterable[str]) -> None:
+    missing = [key for key in required if key not in params or params[key] is None]
+    if missing:
+        raise ValueError(f"Missing required argument(s): {', '.join(missing)}")
 
 
 class ReadFileTool(BaseTool):
@@ -26,12 +110,15 @@ class ReadFileTool(BaseTool):
     
     def _run(self, *args, **kwargs) -> str:
         """Read the contents of a file."""
-        import asyncio
-        return asyncio.run(self.file_tools.read_file(kwargs['file_path']))
+        params = _coerce_params(args, kwargs, positional_key="file_path")
+        _ensure_required(params, ["file_path"])
+        return _run_coroutine_sync(self.file_tools.read_file(params["file_path"]))
     
     async def _arun(self, *args, **kwargs) -> str:
         """Read the contents of a file asynchronously."""
-        return await self.file_tools.read_file(kwargs['file_path'])
+        params = _coerce_params(args, kwargs, positional_key="file_path")
+        _ensure_required(params, ["file_path"])
+        return await self.file_tools.read_file(params["file_path"])
 
 
 class WriteFileTool(BaseTool):
@@ -51,13 +138,18 @@ class WriteFileTool(BaseTool):
     
     def _run(self, *args, **kwargs) -> str:
         """Write content to a file."""
-        import asyncio
-        success = asyncio.run(self.file_tools.write_file(kwargs['file_path'], kwargs['content']))
+        params = _coerce_params(args, kwargs)
+        _ensure_required(params, ["file_path", "content"])
+        success = _run_coroutine_sync(
+            self.file_tools.write_file(params["file_path"], params["content"])
+        )
         return "Success" if success else "Failed"
     
     async def _arun(self, *args, **kwargs) -> str:
         """Write content to a file asynchronously."""
-        success = await self.file_tools.write_file(kwargs['file_path'], kwargs['content'])
+        params = _coerce_params(args, kwargs)
+        _ensure_required(params, ["file_path", "content"])
+        success = await self.file_tools.write_file(params["file_path"], params["content"])
         return "Success" if success else "Failed"
 
 
@@ -78,13 +170,16 @@ class ListFilesTool(BaseTool):
     
     def _run(self, *args, **kwargs) -> str:
         """List files in a directory."""
-        import asyncio
-        files = asyncio.run(self.file_tools.list_files(kwargs.get('directory', ""), kwargs.get('pattern', "*")))
+        params = _coerce_params(args, kwargs, defaults={"directory": "", "pattern": "*"})
+        files = _run_coroutine_sync(
+            self.file_tools.list_files(params.get('directory', ""), params.get('pattern', "*"))
+        )
         return json.dumps(files)
     
     async def _arun(self, *args, **kwargs) -> str:
         """List files in a directory asynchronously."""
-        files = await self.file_tools.list_files(kwargs.get('directory', ""), kwargs.get('pattern', "*"))
+        params = _coerce_params(args, kwargs, defaults={"directory": "", "pattern": "*"})
+        files = await self.file_tools.list_files(params.get('directory', ""), params.get('pattern', "*"))
         return json.dumps(files)
 
 
@@ -105,8 +200,13 @@ class RunCommandTool(BaseTool):
     
     def _run(self, *args, **kwargs) -> str:
         """Run a shell command."""
-        import asyncio
-        exit_code, stdout, stderr = asyncio.run(self.file_tools.run_command(kwargs['command'], kwargs.get('cwd', "")))
+        params = _coerce_params(args, kwargs, positional_key="command")
+        _ensure_required(params, ["command"])
+        command = params["command"]
+        _validate_shell_command(command)
+        exit_code, stdout, stderr = _run_coroutine_sync(
+            self.file_tools.run_command(command, params.get('cwd', ""))
+        )
         return json.dumps({
             "exit_code": exit_code,
             "stdout": stdout,
@@ -115,7 +215,11 @@ class RunCommandTool(BaseTool):
     
     async def _arun(self, *args, **kwargs) -> str:
         """Run a shell command asynchronously."""
-        exit_code, stdout, stderr = await self.file_tools.run_command(kwargs['command'], kwargs.get('cwd', ""))
+        params = _coerce_params(args, kwargs, positional_key="command")
+        _ensure_required(params, ["command"])
+        command = params["command"]
+        _validate_shell_command(command)
+        exit_code, stdout, stderr = await self.file_tools.run_command(command, params.get('cwd', ""))
         return json.dumps({
             "exit_code": exit_code,
             "stdout": stdout,
@@ -168,20 +272,26 @@ class GenerateTestsTool(BaseTool):
     def _run(self, *args, **kwargs) -> str:
         """Generate tests for the project."""
         try:
-            analysis = json.loads(kwargs['project_analysis'])
-            tests = self.test_generator.generate_tests(analysis, kwargs.get('output_dir', 'tests'))
+            params = _coerce_params(args, kwargs)
+            _ensure_required(params, ["project_analysis"])
+            analysis = json.loads(params['project_analysis'])
+            output_dir = params.get('output_dir', 'tests')
+            tests = self.test_generator.generate_tests(analysis, output_dir)
             return json.dumps(tests)
         except Exception as e:
-            return json.dumps({"error": str(e)})
+            raise RuntimeError(f"Error generating tests: {e}")
     
     async def _arun(self, *args, **kwargs) -> str:
         """Generate tests for the project asynchronously."""
         try:
-            analysis = json.loads(kwargs['project_analysis'])
-            tests = self.test_generator.generate_tests(analysis, kwargs.get('output_dir', 'tests'))
+            params = _coerce_params(args, kwargs)
+            _ensure_required(params, ["project_analysis"])
+            analysis = json.loads(params['project_analysis'])
+            output_dir = params.get('output_dir', 'tests')
+            tests = self.test_generator.generate_tests(analysis, output_dir)
             return json.dumps(tests)
         except Exception as e:
-            return json.dumps({"error": str(e)})
+            raise RuntimeError(f"Error generating tests: {e}")
 
 
 class RunTestsTool(BaseTool):
@@ -202,21 +312,24 @@ class RunTestsTool(BaseTool):
     def _run(self, *args, **kwargs) -> str:
         """Run tests and collect results."""
         try:
-            import asyncio
-            paths = json.loads(kwargs.get('test_paths', "[]")) if kwargs.get('test_paths') else None
-            results = asyncio.run(self.test_runner.run_tests(paths))
+            params = _coerce_params(args, kwargs)
+            test_paths_param = params.get('test_paths')
+            paths = json.loads(test_paths_param) if test_paths_param else None
+            results = _run_coroutine_sync(self.test_runner.run_tests(paths))
             return json.dumps(results)
         except Exception as e:
-            return json.dumps({"error": str(e)})
+            raise RuntimeError(f"Error running tests: {e}")
     
     async def _arun(self, *args, **kwargs) -> str:
         """Run tests and collect results asynchronously."""
         try:
-            paths = json.loads(kwargs.get('test_paths', "[]")) if kwargs.get('test_paths') else None
+            params = _coerce_params(args, kwargs)
+            test_paths_param = params.get('test_paths')
+            paths = json.loads(test_paths_param) if test_paths_param else None
             results = await self.test_runner.run_tests(paths)
             return json.dumps(results)
         except Exception as e:
-            return json.dumps({"error": str(e)})
+            raise RuntimeError(f"Error running tests: {e}")
 
 
 class GenerateReportTool(BaseTool):
@@ -237,17 +350,23 @@ class GenerateReportTool(BaseTool):
     def _run(self, *args, **kwargs) -> str:
         """Generate a test report."""
         try:
-            results = json.loads(kwargs['test_results'])
-            report_path = self.aggregator.generate_report(results, kwargs.get('output_file', "test_report.html"))
+            params = _coerce_params(args, kwargs)
+            _ensure_required(params, ["test_results"])
+            results = json.loads(params['test_results'])
+            output_file = params.get('output_file', "test_report.html")
+            report_path = self.aggregator.generate_report(results, output_file)
             return json.dumps({"report_path": report_path})
         except Exception as e:
-            return json.dumps({"error": str(e)})
-    
+            raise RuntimeError(f"Error generating report: {e}")
+
     async def _arun(self, *args, **kwargs) -> str:
         """Generate a test report asynchronously."""
         try:
-            results = json.loads(kwargs['test_results'])
-            report_path = self.aggregator.generate_report(results, kwargs.get('output_file', "test_report.html"))
+            params = _coerce_params(args, kwargs)
+            _ensure_required(params, ["test_results"])
+            results = json.loads(params['test_results'])
+            output_file = params.get('output_file', "test_report.html")
+            report_path = self.aggregator.generate_report(results, output_file)
             return json.dumps({"report_path": report_path})
         except Exception as e:
-            return json.dumps({"error": str(e)})
+            raise RuntimeError(f"Error generating report: {e}")

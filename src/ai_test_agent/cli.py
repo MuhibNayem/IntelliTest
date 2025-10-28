@@ -7,7 +7,9 @@ import click
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from .agent.agent import TestAutomationAgent
+from .agent.session import SessionManager
 from .config import Settings, settings
+from .interactive import InteractiveShell
 
 CONFIG_DIR_NAME = ".aitestagent"
 CONFIG_FILE_NAME = "config.json"
@@ -498,4 +500,15 @@ def interactive(project_path: Optional[str], llm_model: Optional[str]):
     )
     agent = TestAutomationAgent(project_path=project_root, settings_obj=current_settings)
 
-    click.echo("Interactive mode not implemented yet. Stay tuned!")
+    session_manager = SessionManager(project_root=project_root)
+    shell = InteractiveShell(
+        agent=agent,
+        session_manager=session_manager,
+        settings=current_settings,
+        project_root=project_root,
+    )
+
+    try:
+        shell.run()
+    except Exception as exc:
+        raise click.ClickException(f"Interactive session failed: {exc}") from exc

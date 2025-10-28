@@ -1,8 +1,10 @@
 from datetime import datetime
 import json
+import os
 import subprocess
 from pathlib import Path
 from typing import Dict, List, Union
+import tempfile
 from .reporter import TestReporter
 from ..config import Settings, settings
 
@@ -28,21 +30,26 @@ class CoverageAnalyzer:
             return {"error": "Unsupported project type"}
     
     def _analyze_python_coverage(self, project_path: Path) -> Dict:
-        # Run coverage.py
-        # Add exclude patterns to .coveragerc
-        with open(project_path / ".coveragerc", "w") as f:
-            f.write("[run]\n")
-            f.write(f"omit = {','.join(self.settings.coverage_exclude_patterns)}\n")
+        with tempfile.NamedTemporaryFile("w", suffix=".coveragerc", delete=False) as tmp_file:
+            tmp_file.write("[run]\n")
+            if self.settings.coverage_exclude_patterns:
+                tmp_file.write(f"omit = {','.join(self.settings.coverage_exclude_patterns)}\n")
+            coveragerc_path = Path(tmp_file.name)
+
+        env = os.environ.copy()
+        env["COVERAGE_RCFILE"] = str(coveragerc_path)
 
         run_result = subprocess.run(
             ["coverage", "run", "-m", "pytest"],
             cwd=project_path,
             check=False,
             capture_output=True,
-            text=True
+            text=True,
+            env=env,
         )
 
         if run_result.returncode != 0:
+            coveragerc_path.unlink(missing_ok=True)
             return {"error": "Failed to run pytest with coverage", "details": run_result.stderr}
 
         json_result = subprocess.run(
@@ -50,8 +57,11 @@ class CoverageAnalyzer:
             cwd=project_path,
             check=False,
             capture_output=True,
-            text=True
+            text=True,
+            env=env,
         )
+
+        coveragerc_path.unlink(missing_ok=True)
 
         if json_result.returncode != 0:
             return {"error": "Failed to generate coverage.json", "details": json_result.stderr}
@@ -60,12 +70,8 @@ class CoverageAnalyzer:
         if coverage_file.exists():
             with open(coverage_file, "r") as f:
                 coverage_data = json.load(f)
-            # Clean up .coveragerc
-            (project_path / ".coveragerc").unlink(missing_ok=True)
             return self._to_unified_format(coverage_data, "python")
         else:
-            # Clean up .coveragerc even if coverage.json is not found
-            (project_path / ".coveragerc").unlink(missing_ok=True)
             return {"error": "coverage.json not found"}
 
     def _analyze_js_coverage(self, project_path: Path) -> Dict:

@@ -1,7 +1,8 @@
 import asyncio
 import json
+import textwrap
 from pathlib import Path
-from typing import Dict, List, Optional, TypedDict, Annotated, Union, cast, Tuple
+from typing import Dict, Generator, List, Optional, TypedDict, Annotated, Union, cast, Tuple
 from langchain.tools import BaseTool
 from langchain_core.agents import AgentAction
 from langchain_community.llms import Ollama
@@ -81,8 +82,9 @@ class TestAutomationAgent:
             tools=self._tool_descriptions_text,
             tool_names=self._tool_names_text,
             input="{input}",
-            agent_scratchpad="{agent_scratchpad}",
+            agent_scratchpad="{agent_scratchpad}"
         )
+        
         
         # Initialize memory saver for LangGraph
         self.memory_saver = MemorySaver()
@@ -185,18 +187,105 @@ class TestAutomationAgent:
 
     def _parse_agent_output(self, llm_output: str) -> Union[AgentAction, Dict]:
         """Parse the LLM's output to extract an AgentAction or a final response."""
-        # Use regex to parse the Action and Action Input
+        try:
+            # Attempt to parse as JSON first
+            json_output = json.loads(llm_output)
+            if isinstance(json_output, dict) and "action" in json_output and "action_input" in json_output:
+                action = json_output["action"]
+                action_input = json_output["action_input"]
+                if action == "Final Answer":
+                    return {"output": action_input}
+                return AgentAction(tool=action, tool_input=action_input, log=llm_output)
+        except json.JSONDecodeError:
+            pass  # Not a JSON object, proceed to regex parsing or treat as final answer
+
+        # Fallback to regex parsing (for older models or specific cases)
         action_pattern = r"Action:\s*(.*?)\s*Action Input:\s*(.*)"
         match = re.search(action_pattern, llm_output, re.DOTALL)
 
         if match:
             try:
                 action = match.group(1).strip()
-                action_input = match.group(2).strip()
-                return AgentAction(tool=action, tool_input=action_input, log=llm_output)
+                action_input_raw = match.group(2).strip()
+                for marker in ["\nObservation:", " Observation:"]:
+                    if marker in action_input_raw:
+                        action_input_raw = action_input_raw.split(marker, 1)[0].strip()
+                if action_input_raw.startswith("Observation:"):
+                    action_input_raw = action_input_raw[len("Observation:"):].strip()
+                parsed_input: Union[str, Dict, List] = action_input_raw
+                if action_input_raw:
+                    json_candidate = None
+                    if action_input_raw.startswith("{"):
+                        brace_level = 0
+                        collected = []
+                        for ch in action_input_raw:
+                            collected.append(ch)
+                            if ch == "{":
+                                brace_level += 1
+                            elif ch == "}":
+                                brace_level -= 1
+                                if brace_level == 0:
+                                    break
+                        candidate_str = "".join(collected)
+                        json_candidate = candidate_str
+                    elif action_input_raw.startswith("["):
+                        bracket_level = 0
+                        collected = []
+                        for ch in action_input_raw:
+                            collected.append(ch)
+                            if ch == "[":
+                                bracket_level += 1
+                            elif ch == "]":
+                                bracket_level -= 1
+                                if bracket_level == 0:
+                                    break
+                        candidate_str = "".join(collected)
+                        json_candidate = candidate_str
+
+                    if json_candidate:
+                        try:
+                            parsed_input = json.loads(json_candidate)
+                        except json.JSONDecodeError:
+                            try:
+                                import ast
+
+                                candidate = ast.literal_eval(json_candidate)
+                                if isinstance(candidate, (dict, list)):
+                                    parsed_input = candidate
+                            except (ValueError, SyntaxError):
+                                parsed_input = action_input_raw
+                    elif action_input_raw.startswith("{") and action_input_raw.endswith("}"):
+                        try:
+                            parsed_input = json.loads(action_input_raw)
+                        except json.JSONDecodeError:
+                            try:
+                                import ast
+
+                                candidate = ast.literal_eval(action_input_raw)
+                                if isinstance(candidate, (dict, list)):
+                                    parsed_input = candidate
+                            except (ValueError, SyntaxError):
+                                parsed_input = action_input_raw
+                    elif action_input_raw.startswith("[") and action_input_raw.endswith("]"):
+                        try:
+                            parsed_input = json.loads(action_input_raw)
+                        except json.JSONDecodeError:
+                            try:
+                                import ast
+
+                                candidate = ast.literal_eval(action_input_raw)
+                                if isinstance(candidate, (dict, list)):
+                                    parsed_input = candidate
+                            except (ValueError, SyntaxError):
+                                parsed_input = action_input_raw
+                if not parsed_input or parsed_input == {}:
+                    return {"output": llm_output}
+                if isinstance(parsed_input, str):
+                    return {"output": llm_output}
+                return AgentAction(tool=action, tool_input=parsed_input, log=llm_output)
             except Exception:
                 pass # Fallback to treating as final answer
-        
+
         return {"output": llm_output} # Treat as final answer
 
     def _agent_node(self, state: AgentState) -> Dict:
@@ -224,7 +313,18 @@ class TestAutomationAgent:
 
         llm_output = self.llm.invoke([SystemMessage(content=prompt)])
         
-        parsed_output = self._parse_agent_output(llm_output.content)
+        print(f"[debug] LLM output: {llm_output}")
+
+        if isinstance(llm_output, str):
+            raw_output = llm_output
+        elif hasattr(llm_output, "content"):
+            raw_output = llm_output.content
+        elif isinstance(llm_output, dict) and "content" in llm_output:
+            raw_output = llm_output["content"]
+        else:
+            raw_output = str(llm_output)
+
+        parsed_output = self._parse_agent_output(raw_output)
 
         if isinstance(parsed_output, AgentAction):
             return {"messages": [AIMessage(content="", additional_kwargs={"action": parsed_output})]}
@@ -238,14 +338,58 @@ class TestAutomationAgent:
             action = last_message.additional_kwargs["action"]
             tool_name = action.tool
             tool_input = action.tool_input
-            
+            prepared_input = self._prepare_tool_input(tool_input)
+
             # Find and execute the tool
             for tool in self.tools:
                 if tool.name == tool_name:
-                    observation = tool.run(tool_input)
+                    # Debug logging to trace tool invocation inputs
+                    click.echo(f"[debug] Invoking tool {tool_name} with input: {prepared_input}")
+                    try:
+                        observation = tool.invoke(prepared_input)
+                    except Exception as exc:
+                        click.echo(f"[debug] Tool {tool_name} raised {exc}")
+                        return {
+                            "messages": [
+                                AIMessage(content=f"Observation: Tool error - {exc}")
+                            ]
+                        }
                     return {"messages": [AIMessage(content=f"Observation: {observation}")]}
             return {"messages": [AIMessage(content=f"Error: Tool {tool_name} not found.")]}
         return {"messages": [AIMessage(content="Error: No tool action found in last message.")]}
+
+    @staticmethod
+    def _prepare_tool_input(tool_input: Union[str, Dict, List]) -> Union[str, Dict, List]:
+        """Convert serialized tool input into structured data when possible."""
+        if isinstance(tool_input, str):
+            stripped = tool_input.strip()
+            if not stripped:
+                return {}
+            if stripped.startswith("{") and stripped.endswith("}"):
+                try:
+                    return json.loads(stripped)
+                except json.JSONDecodeError:
+                    try:
+                        import ast
+
+                        parsed = ast.literal_eval(stripped)
+                        if isinstance(parsed, (dict, list)):
+                            return parsed
+                    except (ValueError, SyntaxError):
+                        return tool_input
+            if stripped.startswith("[") and stripped.endswith("]"):
+                try:
+                    return json.loads(stripped)
+                except json.JSONDecodeError:
+                    try:
+                        import ast
+
+                        parsed = ast.literal_eval(stripped)
+                        if isinstance(parsed, (dict, list)):
+                            return parsed
+                    except (ValueError, SyntaxError):
+                        return tool_input
+        return tool_input
 
     def _should_continue(self, state: AgentState) -> str:
         """Decide whether to continue in the graph or end."""
@@ -294,9 +438,11 @@ class TestAutomationAgent:
             user_message = HumanMessage(content=input_text)
             thread_id = "interactive_session"
             config = cast(RunnableConfig, {"configurable": {"thread_id": thread_id}})
+            print(f"Running agent for input: {user_message}")
+            print(f"Running agent for config: {config}")
             result = self.agent.invoke({"messages": [user_message]}, config=config)
             last_ai_message = ""
-            
+            print(f"Agent raw result: {result}")
             if "messages" in result and result["messages"]:
                 for msg in reversed(result["messages"]):
                     if isinstance(msg, AIMessage):
@@ -309,6 +455,45 @@ class TestAutomationAgent:
             return {"success": False, "error": f"Agent execution error: {e}"}
         except Exception as e:
             return {"success": False, "error": f"An unexpected error occurred: {e}"}
+    
+    def stream_response(self, input_text: str) -> Generator[Dict[str, str], None, None]:
+        """Stream the agent response chunk-by-chunk for interactive sessions.
+
+        The current implementation yields textual chunks sequentially. Future
+        enhancements should surface intermediate tool events or structured
+        observations as additional event types.
+        """
+        try:
+            result = self.run(input_text)
+            if result.get("success"):
+                content = result.get("result", "")
+                for chunk in self._chunk_text(content):
+                    yield {"type": "content", "chunk": chunk}
+            else:
+                yield {
+                    "type": "error",
+                    "message": result.get("error", "Unknown agent error."),
+                }
+        except Exception as exc:  # pragma: no cover - defensive
+            yield {"type": "error", "message": str(exc)}
+    
+    @staticmethod
+    def _chunk_text(text: str, width: int = 120) -> Generator[str, None, None]:
+        """Yield manageable chunks from a response for smoother streaming."""
+        if not text:
+            return
+        paragraphs = text.split("\n")
+        for paragraph in paragraphs:
+            if not paragraph:
+                yield ""
+                continue
+            for chunk in textwrap.wrap(
+                paragraph,
+                width=width,
+                drop_whitespace=False,
+                replace_whitespace=False,
+            ):
+                yield chunk
     
     def analyze_project(self) -> Dict:
         """Analyze the project structure."""
@@ -375,11 +560,11 @@ class TestAutomationAgent:
 
     def record_feedback(self, user_input: str, agent_response: str, feedback: str) -> Dict:
         """Record user feedback for agent's performance."""
-        print(f"--- User Feedback Recorded ---")
+        print("--- User Feedback Recorded ---")
         print(f"User Input: {user_input}")
         print(f"Agent Response: {agent_response}")
         print(f"Feedback: {feedback}")
-        print(f"----------------------------")
+        print("----------------------------")
         return {"success": True, "message": "Feedback recorded successfully."}
 
     async def debug_tests(self, max_iterations: int = 3) -> Dict:

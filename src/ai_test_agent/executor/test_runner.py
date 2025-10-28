@@ -146,6 +146,8 @@ class TestRunner:
                                 if "tool" in pyproject and "pytest" in pyproject["tool"]:
                                     return "pytest"
                         except (ImportError, Exception):
+                            # Log the exception for debugging, but continue trying other methods
+                            # print(f"Debug: Error loading pyproject.toml: {e}")
                             pass
                     else:
                         return "pytest"
@@ -172,7 +174,9 @@ class TestRunner:
                                 package_json = json.load(f)
                                 if "jest" in package_json.get("dependencies", {}) or "jest" in package_json.get("devDependencies", {}):
                                     return "jest"
-                        except:
+                        except Exception:
+                            # Log the exception for debugging, but continue trying other methods
+                            # print(f"Debug: Error loading package.json: {e}")
                             pass
                     else:
                         return "jest"
@@ -192,7 +196,9 @@ class TestRunner:
                         content = f.read()
                         if "junit" in content.lower():
                             return "junit"
-                except:
+                except Exception:
+                    # Log the exception for debugging, but continue trying other methods
+                    # print(f"Debug: Error loading pom.xml: {e}")
                     pass
             
             if build_gradle.exists():
@@ -201,7 +207,9 @@ class TestRunner:
                         content = f.read()
                         if "junit" in content.lower():
                             return "junit"
-                except:
+                except Exception:
+                    # Log the exception for debugging, but continue trying other methods
+                    # print(f"Debug: Error loading build.gradle: {e}")
                     pass
             
             # Default to JUnit for Java projects
